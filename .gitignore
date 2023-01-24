@@ -1,0 +1,7 @@
+###Files to not track (large data files and any pycache)
+
+###SPT-SZ Combined Map Files
+data/combined_map_95GHz_nside8192_ptsrcmasked_50mJy.fits
+data/combined_map_150GHz_nside8192_ptsrcmasked_50mJy.fits
+data/combined_map_220GHz_nside8192_ptsrcmasked_50mJy.fits
+
