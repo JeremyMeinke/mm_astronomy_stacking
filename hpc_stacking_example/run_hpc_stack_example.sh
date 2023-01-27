@@ -16,4 +16,4 @@
 module purge
 module load anaconda/py3
 source activate skymaps-py	###my custom anaconda environment, see included skymaps-py.yml for dependencies
-python Run_act.py  ${SLURM_ARRAY_TASK_ID}
+python hpc_stack_example.py  ${SLURM_ARRAY_TASK_ID}	###Passes array number through function to run multiple jobs parallel (useful for large catalogs)

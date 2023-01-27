@@ -2,3 +2,5 @@ numpy
 matplotlib
 astropy
 healpy
+pixell
+scipy

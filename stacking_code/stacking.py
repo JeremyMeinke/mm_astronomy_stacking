@@ -1,840 +1,585 @@
-#ACT_stack.py
-###For stack on latest act (dr5) maps
+#stacking.py
+###For stacking of maps in healpix (i.e. SPT or Planck) or Plate-Carree (via pixell, i.e. ACT)
 from __future__ import division
 import numpy as np 
-import matplotlib as mpl 
-import matplotlib.pyplot as plt 
 import pandas as pd
 import scipy.ndimage as spi
 import time
-import os
 import healpy as hp
-import astropy
 from astropy.io import fits
+from pixell import enmap
+import gc
 
-def gnomonic(center_dec,center_ra,stepsize,sidesize=60):		###[Deg,Deg,Arcmin,Arcmin]
-	theta=(90-center_dec)*np.pi/180			###[Rad]
-	phi=center_ra*np.pi/180					###[Rad]
+def gnomonic(center_dec, center_ra, pix_res, side_size = 60):		###[Deg,Deg,Arcmin,Arcmin]
+	"""Creates a Gnomonic projection grid around center_dec and center_ra.  Returns grids of theta and phi.  
+	NOTE: This should also already correct for instances where THETA goes outside of [0,np.pi] (which would throw an error in healpy)
 
-	rad=sidesize/2
-	da=stepsize
-	base=np.arange(-rad,rad+da,da)*np.pi/180/60		###convert to Rad here to make it stop doing dumb rounding Sh!t
-	dr=len(base)
-	base[int(np.rint((dr-1)/2))]=0
-	x=base*np.ones([dr,dr])
-	y=(base*np.ones([dr,dr])).T[::-1]		###because latitude number goes the other direction....took me wayyyy too long to realize this....
-	rho=np.sqrt(x**2+y**2)
-	c=np.arctan2(rho,1)
-	lat=np.pi/2-theta
-	t_set=np.pi/2-np.arcsin(np.cos(c)*np.sin(lat)+y*np.cos(c)*np.cos(lat))
-	p_set=phi+np.arctan2(x*np.sin(c),rho*np.cos(lat)*np.cos(c)-y*np.sin(lat)*np.sin(c))
-	return t_set,p_set
+	Parameters
+	----------
+	center_dec: int or float
+		Center declination of desired grid.  Units of Degrees	(standard catalog output)
+	center_ra: int or float
+		Center right ascension of desired grid.  Units of Degrees	(standard catalog output)
+	pix_res: int or float
+		Pixel resolution of desired grid.  Units of arcminutes (as this is the scale we often care about)
+	side_size: int or float
+		Side size of desired grid.  Units of arcminutes (Default == 60 arcminutes)
+	
+	Returns
+	-------
+	t_set: 2d numpy.ndarray
+		2d grid of theta values corresponding to gnomonic grid around center dec and ra. Resolution in units of arcminutes.
+	p_set: 2d numpy.ndarray
+		2d grid of theta values corresponding to gnomonic grid around center dec and ra. Resolution in units of arcminutes.
+	"""
+	theta = (90-center_dec) * np.pi / 180			###[Rad]
+	phi = center_ra * np.pi / 180					###[Rad]
 
-###Taken from CMB_School_Part_03
-def make_2d_gaussian_beam(N,pix_size,fwhm):
-     # make a 2d coordinate system
-    N=int(N)
-    ones = np.ones(N)
-    inds  = (np.arange(N)+.5 - N/2.) * pix_size
-    X = np.outer(ones,inds)
-    Y = np.transpose(X)
-    R = np.sqrt(X**2. + Y**2.)
-    #plt.title('Radial coordinates')
-    #plt.imshow(R)
-  
-    # make a 2d gaussian 
-    beam_sigma = fwhm / np.sqrt(8.*np.log(2))
-    gaussian = np.exp(-.5 *(R/beam_sigma)**2.)
-    gaussian = gaussian / np.sum(gaussian)
-    # return the gaussian
-    #plt.imshow(gaussian)
-    return(gaussian)
+	rad = side_size / 2
+	base = np.arange(-rad, rad+pix_res, pix_res) * np.pi / 180 / 60		###convert to radians here to make it stop doing annoying rounding
+	dr = len(base)
+	base[int(np.rint((dr-1) / 2))] = 0	###Ensuring no float precision issues at the center (for nice, really)
+	###Gnomonic grid setup
+	x = base * np.ones([dr, dr])
+	y = (base * np.ones([dr, dr])).T[::-1]		###because latitude number goes the other direction....
+	###Now to change to theta/phi notation
+	rho = np.sqrt(x**2 + y**2)
+	c = np.arctan2(rho, 1)
+	lat = np.pi / 2 - theta
+	t_set=np.pi / 2 - np.arcsin(np.cos(c)*np.sin(lat) + y*np.cos(c)*np.cos(lat))
+	p_set = phi + np.arctan2(x*np.sin(c), rho*np.cos(lat)*np.cos(c) - y*np.sin(lat)*np.sin(c))
+	
+	return t_set, p_set
 
-def GFilter(Image, pixres, High_fwhm, Low_fwhm):			##fwhm and pixres in same units
-	f2s = 1 / (2 * np.sqrt(np.log(4)) )	
-	high_sig = f2s*High_fwhm/pixres
-	if High_fwhm != 0:
-		remove = spi.gaussian_filter(Image, sigma=high_sig)
-		new = Image-remove
+###From CMB_School_Part_03
+def make_2d_gaussian_beam(N, pix_res, fwhm):
+	"""Creates a 2d gaussian beam of size N x N.  pix_res and fwhm should be the same units.
+
+	Parameters
+	----------
+	N: int
+		Side/size of 2d grid desired.
+	pix_res: int or float
+		Pixel resolution of desired grid.  Same units as fwhm
+	fwhm: int or float
+		Gaussian fwhm desired.  Same units as pix_res
+	
+	Returns
+	-------
+	2d numpy.ndarray
+		2d Gaussian grid.
+	
+	"""
+	# make a 2d coordinate system
+	N=int(N)	###Ensures integer form
+	ones = np.ones(N)
+	inds  = (np.arange(N) + 0.5 - N/2.) * pix_res
+	X = np.outer(ones, inds)
+	Y = np.transpose(X)
+	R = np.sqrt(X**2. + Y**2.)
+	# make a 2d gaussian 
+	beam_sigma = fwhm / np.sqrt(8.*np.log(2))
+	gaussian = np.exp(-.5 * (R/beam_sigma)**2.)
+	gaussian = gaussian / np.sum(gaussian)
+	# return the gaussian
+	return gaussian
+
+def GFilter(stamp, pix_res, high_fwhm, low_fwhm):
+	"""2d gaussian filtering of a stamp cutout.
+
+	Parameters
+	----------
+	stamp: numpy.ndarray
+		Cutout or stamp.  Preferably of a symmetric N x N size.
+	pix_res: int or float
+		angular resolution of each stamp pixel.  Must have same units as map_beam_fwhm and new_beam_fwhm.
+	
+	Returns
+	-------
+	numpy.ndarray
+		Gaussian filtered stamp same size as input
+	"""
+	f2s = 1 / (2*np.sqrt(np.log(4)))	
+	high_sig = f2s * high_fwhm / pix_res
+	if high_fwhm != 0:
+		remove = spi.gaussian_filter(stamp, sigma=high_sig)
+		new_stamp = stamp - remove
 	else:
-		new = np.array(Image)
+		new_stamp = np.array(stamp)
 		
-	low_sig = f2s*Low_fwhm/pixres
-	if Low_fwhm != 0:
-		new = spi.gaussian_filter(new, sigma=low_sig)
+	low_sig = f2s * low_fwhm / pix_res
+	if low_fwhm != 0:
+		new_stamp = spi.gaussian_filter(new_stamp, sigma=low_sig)
 	
-	return new
+	return new_stamp
 
-def change_gaussian_beam_map(Map,pix_size,map_beam_fwhm,new_beam_fwhm,both=True):
-	"deconvolves a map with a Gaussian beam pattern.  NOTE: pix_size and beam_fwhm need to be in the same units" 
+def change_stamp_gaussian_beam(stamp, pix_res, map_beam_fwhm, new_beam_fwhm, fft_cut_both = True, cut_val = 0.25):
+	"""Changes a cutout/stamp's Gaussian beam pattern.  **Doesn't take projections into account**  
+	If an entire map is needed to be converted, I suggest using healpix or pixell functions.
 	
-	###Plot Checking
-	# print(new_FT_gaussian.shape)
-	# plt.imshow(np.real(new_FT_gaussian/map_FT_gaussian))
-	# plt.imshow(np.real(np.fft.fftshift(new_FT_gaussian)))
-	# plt.show()
+	Parameters
+	----------
+	stamp : numpy array
+		cutout or stamp. Needs to be symmetric N x N size
+	pix_res: int or float
+		angular resolution of each stamp pixel.  Must have same units as map_beam_fwhm and new_beam_fwhm.
+	map_beam_fwhm: int or float
+		Original resolution of map cut from.  Must have same units as pix_size and new_beam_fwhm.
+	new_beam_fwhm: int or float
+		New desired resolution of stamp.  Must have same units as pix_size and map_beam_fwhm.
+	fft_cut_both: bool, optional
+		Option if apply an cut in fft space to prevent spurious noise (Default == True)
+	cut_val: float, optional
+		Fft value to apply cut below of. (Default == 0.25)
+
+	Returns
+	-------
+	numpy.ndarray
+		Same size as input stamp (N x N)	
+	"""
 	
-	###NEW NEW METHOD
-	if map_beam_fwhm>new_beam_fwhm:
+	###NEW NEW METHOD using fft
+	if map_beam_fwhm > new_beam_fwhm:
 		# make a 2d gaussian of the map beam
-		map_gaussian = make_2d_gaussian_beam(len(Map),pix_size,map_beam_fwhm)	###Since needs to match size of Map
-		new_gaussian = make_2d_gaussian_beam(len(Map),pix_size,new_beam_fwhm)	###Since needs to match size of Map
+		map_gaussian = make_2d_gaussian_beam(len(stamp),pix_res,map_beam_fwhm)	###Since needs to match size
+		new_gaussian = make_2d_gaussian_beam(len(stamp),pix_res,new_beam_fwhm)	###Since needs to match size
 		# do the convolution
-		map_FT_gaussian=np.fft.fft2(np.fft.fftshift(map_gaussian)) # first add the shift so that it isredeconvolved-rstacks[f] central
-		new_FT_gaussian=np.fft.fft2(np.fft.fftshift(new_gaussian)) # first add the shift so that it is central
-		g_val=0.25
-		if both:			###Can't decide if cutting both off at the same frequency location or at 1/sigma location is better
-			new_FT_gaussian[map_FT_gaussian<g_val]=np.min(np.real(new_FT_gaussian[map_FT_gaussian>g_val]))
+		map_ft_gaussian=np.fft.fft2(np.fft.fftshift(map_gaussian)) # first add the shift so that it isredeconvolved-rstacks[f] central
+		new_ft_gaussian=np.fft.fft2(np.fft.fftshift(new_gaussian)) # first add the shift so that it is central
+		if fft_cut_both:			###Can't decide if cutting both off at the same frequency location or at 1/sigma location is better
+			new_ft_gaussian[map_ft_gaussian < cut_val] = np.min(np.real(new_ft_gaussian[map_ft_gaussian > cut_val]))
 		else:
-			new_FT_gaussian[map_FT_gaussian<g_val]=g_val
+			new_ft_gaussian[map_ft_gaussian < cut_val] = cut_val
 		
-		map_FT_gaussian[map_FT_gaussian<g_val]=g_val
-		FT_Map=np.fft.fft2(np.fft.fftshift(Map)) #shift the map too
-		fft_final=FT_Map*np.real(new_FT_gaussian)/np.real(map_FT_gaussian)
-		# print(np.max(fft_final))
-		deconvolved_map=np.fft.fftshift(np.real(np.fft.ifft2(fft_final)))
+		map_ft_gaussian[map_ft_gaussian < cut_val] = cut_val
+		ft_Map = np.fft.fft2(np.fft.fftshift(stamp)) #shift the map too
+		fft_final = ft_Map * np.real(new_ft_gaussian) / np.real(map_ft_gaussian)
+		deconvolved_map = np.fft.fftshift(np.real(np.fft.ifft2(fft_final)))
 	else:
-		deconvolved_map=GFilter(Map,pix_size,0,np.sqrt(new_beam_fwhm**2-map_beam_fwhm**2))
+		deconvolved_map = GFilter(stamp, pix_res, 0, np.sqrt(new_beam_fwhm**2 - map_beam_fwhm**2))
 	
 	return deconvolved_map
 
-###new method using my gnomonic project scheme (same as reproject.thumbnails(...,order=0,oversampling=1,...), but 2-5x faster)
-def Stack(mapfile,catfile,side_arcmin,res,datasavename,alm_T_map_F=False,nside=8192,planck=False):	###[Arcmin,Arcmin], set planck=True if using planck maps (need to load differently and change coordinate system).  nside only needed to be provided if alm_T_map_F=True
-	'''alm_T_map_F only used when planck=False, 
-	nside only used if alm_T_map_F==True'''
-	print('StartTime: ',time.asctime())
-	###Getting catalog setup (takes decs and ras in radians)
-	if catfile[-3:]=='txt':
-		cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-		if len(cat.shape)==1:
-			clen=1
-			decs=[cat[2]]
-			ras=[cat[1]]
-		else:
-			clen=len(cat)
-			decs=cat[:,2]
-			ras=cat[:,1]
-		cat=None;del cat	###To free up memory??
-	elif catfile[-3:]=='pkl':
-		cat=pd.read_pickle(catfile)
-		clen=len(cat)
-		ras=cat.iloc[:,0].to_numpy()
-		decs=cat.iloc[:,1].to_numpy()
-		cat=None;del cat	###To free up memory??
-	else:
-		print('Catalog file neither .txt or .pkl (pandas dataframe)...')
-		return None
-	###CHECK
-	print(clen)
-	print(np.max(decs),np.min(decs),np.max(ras),np.min(ras))	#Another validation check
+def map_data_healpix_fits(
+		file_name, hdu = 1, nside = 8192, healpix_alm = False, input_nest = False, 
+		rotation = False, rot_coord = ["G", "C"], rot_lmax = None, unreadable_header = False):
+	"""Load map_data from healpix-formatted fits file into a ring healpix map format (standard healpy format).
+		***Careful with Planck maps, they can be in nested and galactic formats (though not always...)***
+		
+	Parameters
+	----------
 
-	if planck:		###Since I often have to save them as separate fits files that healpy sometimes doesn't like
-		m = astropy.io.fits.open(mapfile)
-		mapdata = np.asarray(np.ndarray.tolist(m[1].data))
-		print(mapdata.shape)
-		mapdata=mapdata.reshape(np.prod(mapdata.shape),)	###Using np.prod so don't care about NSIDE anymore
-		nside=int(np.sqrt(len(mapdata)/12))
-		print('Planck Map, nside of %s predicted'%nside)
-		m = None; del m
-		r = hp.rotator.Rotator(coord=['G','C'])		###Since planck maps are often provided in galactic...whoopsie was rotating it backwards ['G','C'] before....
-		mapdata=r.rotate_map_alms(mapdata)
-		print(mapdata.shape)
-	else:
-		if alm_T_map_F:
-			alm=hp.read_alm(mapfile)
-			mapdata=hp.alm2map(alm, nside)
-			alm=None; del alm
-		else:
-			mapdata=hp.read_map(mapfile)
-			nside=int(np.sqrt(len(mapdata)/12))
-			print('Healpy.read_map used, nside of %s predicted'%nside)
-
-	stackset=np.zeros([int(np.round(side_arcmin/res)+1),int(np.round(side_arcmin/res)+1)])
+	file_name: str
+		file name to load
+	hdu: int, optional
+		(Default == 1) If file contains multiple maps (such as T, Q, U), specify which hdu to open. Data normally starts at 1, not 0 due to first being the fits PrimaryHDU
+	nside: int, optional
+		healpix nside resolution of map.  Default == 8192 (resolution of SPT maps)
+	healpix_alm: bool, optional
+		For when provided file is a healpix alm (spherical harmonic coeffs). Default == False
+	input_nest: bool, optional
+		For when provided file is healpix nested format (instead of default ring). Doesn't apply to alms.  Default == False
+	rotation: bool, optional
+		Whether the input map is wanted to be rotated.  Default == False
+	rot_coord: list, optional 
+		Healpy coordinates to rotate only if rotation == True.  Default == ["G", "C"] (i.e. galactic to celestial)
+	rot_lmax: int, optional
+		If a lmax is to be specified for any map rotations. Default == None
+	unreadable_header: bool, optional
+		Set True if healpy cannot read header.  Only for maps, not alms. Default == False
 	
-	for c in range(clen):
-		t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-		stackset+=mapdata[hp.ang2pix(nside,np.abs(t_set),p_set)]
-	print(clen)
-	savefile='temp/'+datasavename+'_%.2farcmin_%.2fres.txt'%(side_arcmin,res)
-	np.savetxt(savefile,stackset, header='timestamp=%s'%str(time.asctime()))
-	print('savename: ',savefile)
-	print('PostStack check ',time.asctime())
+	Returns
+	-------
+	1d np.ndarray
+		Corresponding to healpy map formatting
+	"""
+	if healpix_alm:
+		alm = hp.read_alm(file_name)
+		if rotation:
+			rot = hp.rotator.Rotator(coord = rot_coord)
+			alm = rot.rotate_alm(alm, rot_lmax)
+		map_data = hp.alm2map(alm, nside)
+		alm = None; del alm			###attempted memory cleaning
+	else:
+		if unreadable_header:
+			m = fits.open(file_name)
+			map_data = np.asarray(np.ndarray.tolist(m[hdu].data))
+			map_data = map_data.reshape(np.prod(map_data.shape),)	###As some in IDL format with two-dimensional even tho healpy does better with one dim.
+			m = None; del m			###same attempt at memory cleaning
+		else:
+			map_data = hp.read_map(file_name, field = hdu - 1,  dtype = np.float64, nest = input_nest, memmap=True)
+		###Now correcting for nest to rings
+		if input_nest:
+			hp.reorder(map_data, n2r = True)
+	
+		###Now applying rotation to map
+		if rotation:
+			rot = hp.rotator.Rotator(coord = rot_coord)
+			map_data = rot.rotate_map_alms(map_data, rot_lmax)
+
+	gc.collect()
+	return map_data
+
+def map_data_pixell_fits(file_name, **kwargs):
+	"""Simply pixell.enmap.read_map(file_name, **kwargs)
+	See https://github.com/simonsobs/pixell/blob/master/pixell/enmap.py for kwarg options"""
+	return enmap.read_map(file_name, **kwargs)
+
+def stack(
+	map_data, catalog_ra, catalog_dec, side_arcmin, pix_res, data_save_name,
+	plate_carree = False, nside = 8192, interpolate = True, verbose = True):
+	"""Gnomonic projection stacking (sum, not average) of a catalog of points from a given map_data.
+	
+	Parameters
+	----------
+
+	mapdata: healpy or pixell map
+		If healpy, basically just a 12 * nside**2 length 1d array.  Similar array structure for pixell plate-carree maps I think?
+	catalog_ra: list or 1d array
+		Right ascensions (in Degrees) of catalog to stack. Should have same length as catalog_dec
+	catalog_dec: list or 1d array
+		Declinations (in Degrees) of catalog to stack. Should have same length as catalog_ra
+	side_arcmin: int or float
+		Side length of cutout (in arcminutes).
+	pix_res: int or float
+		Angular resolution of each stamp pixel, in units of arcminutes
+	data_save_name: str
+		Save name (and location) of output data. "_%.2farcmin_%.2fpixres.txt" is added to the end
+	plate_carree: bool
+		False (Default) == normally expect Healpix map projection. True == If provided mapdata is in Plate-Carree form
+	nside: int
+		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2 = npix). Only used if plate_carree = False
+	interpolate: bool
+		Whether to employ bi-linear interpolation.  Takes ~4x longer, but can *slightly* reduce noise or artificial pixelization (Default == True)
+	verbose: bool
+		prints additional outputs for logging and checks
+	
+	Returns
+	-------
+	None (data saved as text file according to given data_save_name)
+
+	"""
+	
+	if verbose:
+		print('StartTime: ', time.asctime())	###For logging purposes
+	
+	if len(catalog_dec) != len(catalog_ra):  ###Check catalog length
+		raise ValueError("lengths of catalog_dec and catalog_ra do not match!!")
+	
+	cat_len = len(catalog_dec)
+	if verbose:
+		print("Catalog length: %i"%cat_len)
+
+	stackset = np.zeros([int(np.round(side_arcmin/pix_res) + 1), int(np.round(side_arcmin/pix_res) + 1)])		###Blank stack to start with
+
+	if interpolate:	###bilinear interpolation
+		if plate_carree:	###i.e. ACT, so using pixell defined map instead
+			for c in range(cat_len):	###Cycling through catalog
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				stackset+=map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=1)	###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+		else:
+			for c in range(cat_len):	###Cycling through catalog
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				stackset+=hp.get_interp_val(map_data, t_set, p_set + np.pi / 2)
+	else:
+		if plate_carree:
+			for c in range(cat_len):	###Cycling through catalog
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
+				stackset+=map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+		else:
+			for c in range(cat_len):	###Cycling through catalog
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				stackset+=map_data[hp.ang2pix(nside, t_set, p_set)]
+	
+	savefile=data_save_name + "_%.2farcmin_%.2fpixres.txt"%(side_arcmin, pix_res)
+	np.savetxt(savefile, stackset, header = "timestamp = %s"%str(time.asctime()))
+	
+	if verbose:
+		print('savename: ', savefile)
+		print('PostStack check ', time.asctime())
+	
 	return None
 
-def Stack_interpolate(mapfile,catfile,side_arcmin,res,datasavename,alm_T_map_F=False,nside=8192,planck=False):	###[Arcmin,Arcmin], set planck=True if using planck maps (need to load differently and change coordinate system).  nside only needed to be provided if alm_T_map_F=True
-	'''alm_T_map_F only used when planck=False, 
-	nside only used if alm_T_map_F==True'''
-	print('StartTime: ',time.asctime())
-	###Getting catalog setup (takes decs and ras in radians)
-	if catfile[-3:]=='txt':
-		cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-		if len(cat.shape)==1:
-			clen=1
-			decs=[cat[2]]
-			ras=[cat[1]]
-		else:
-			clen=len(cat)
-			decs=cat[:,2]
-			ras=cat[:,1]
-		cat=None;del cat	###To free up memory??
-	elif catfile[-3:]=='pkl':
-		cat=pd.read_pickle(catfile)
-		clen=len(cat)
-		ras=cat.iloc[:,0].to_numpy()
-		decs=cat.iloc[:,1].to_numpy()
-		cat=None;del cat	###To free up memory??
-	else:
-		print('Catalog file neither .txt or .pkl (pandas dataframe)...')
-		return None
-	###CHECK
-	print(clen)
-	print(np.max(decs),np.min(decs),np.max(ras),np.min(ras))	#Another validation check
-
-	if planck:		###Since I often have to save them as separate fits files that healpy sometimes doesn't like
-		m = astropy.io.fits.open(mapfile)
-		mapdata = np.asarray(np.ndarray.tolist(m[1].data))
-		print(mapdata.shape)
-		mapdata=mapdata.reshape(np.prod(mapdata.shape),)	###Using np.prod so don't care about NSIDE anymore
-		nside=int(np.sqrt(len(mapdata)/12))
-		print('Planck Map, nside of %s predicted'%nside)
-		m = None; del m
-		r = hp.rotator.Rotator(coord=['G','C'])		###Since planck maps are often provided in galactic...whoopsie was rotating it backwards ['G','C'] before....
-		mapdata=r.rotate_map_alms(mapdata)
-		print(mapdata.shape)
-	else:
-		if alm_T_map_F:
-			alm=hp.read_alm(mapfile)
-			mapdata=hp.alm2map(alm, nside)
-			alm=None; del alm
-		else:
-			mapdata=hp.read_map(mapfile)
-			nside=int(np.sqrt(len(mapdata)/12))
-			print('Healpy.read_map used, nside of %s predicted'%nside)
-
-	stackset=np.zeros([int(np.round(side_arcmin/res)+1),int(np.round(side_arcmin/res)+1)])
+def stack_cap(
+		map_data, catalog_ra, catalog_dec, cap_radii_arcmin, pix_res, data_save_name,
+        plate_carree = False, nside = 8192, interpolate = True, verbose = True):
+	"""Calculates the CAPs (circular apertures, as in Schaan et al. 2021) around a catalog of points from a 
+	given map_data.  Uses gnomonic projection cutouts.  Pandas dataframe saved as .csv
 	
-	for c in range(clen):
-		t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-		stackset+=hp.get_interp_val(mapdata,np.abs(t_set),p_set)
-	print(clen)
-	savefile='temp/'+datasavename+'_interpolated_%.2farcmin_%.2fres.txt'%(side_arcmin,res)
-	np.savetxt(savefile,stackset, header='timestamp=%s'%str(time.asctime()))
-	print('savename: ',savefile)
-	print('PostStack check ',time.asctime())
+	Parameters
+	----------
+
+	mapdata: healpy or pixell map
+		If healpy, basically just a 12 * nside**2 length 1d array.  Similar array structure for pixell plate-carree maps I think?
+	catalog_ra: list or 1d array
+		Right ascensions (in Degrees) of catalog to stack. Should have same length as catalog_dec
+	catalog_dec: list or 1d array
+		Declinations (in Degrees) of catalog to stack. Should have same length as catalog_ra
+	cap_radii_arcmin: list or numpy.ndarray
+		1d list or array of CAP radii (in arcmin).
+	pix_res: int or float
+		Angular resolution of each stamp pixel, in units of arcminutes
+	data_save_name: str
+		Save name (and location) of output data.   "_CAPs_%.2fpixres.csv" is added to the end
+	file_type: str
+		File type to write pandas table into, i.e. DataFrame.to_"file_type" (Default == "parquet", also used if unknown file_type is given)
+	plate_carree: bool
+		False (Default) == normally expect Healpix map projection. True == If provided mapdata is in Plate-Carree form
+	nside: int
+		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2 = npix). Only used if plate_carree = False
+	interpolate: bool
+		Whether to employ bi-linear interpolation.  Takes ~4x longer, but can *slightly* reduce noise or artificial pixelization (Default == True)
+	verbose: bool
+		prints additional outputs for logging and checks
+	
+	Returns
+	-------
+	None (data saved as csv file according to given data_save_name + "_CAPs_%.2fpixres.csv"%pix_res)
+
+	"""
+	
+	if verbose:
+		print('StartTime: ', time.asctime())	###For logging purposes
+	
+	if len(catalog_dec) != len(catalog_ra):  ###Check catalog length
+		raise ValueError("lengths of catalog_dec and catalog_ra do not match!!")
+	
+	cat_len = len(catalog_dec)
+	if verbose:
+		print("Catalog length: %i"%cat_len)
+	
+	side_arcmin = 3 * np.max(cap_radii_arcmin)	###as real max required would be 2*np.sqrt(2), i.e. < 3 
+
+	if verbose:
+		print('side arc check: ',side_arcmin)
+	dr = int(np.rint(side_arcmin/pix_res + 1))
+	
+	def cap_ap(cap_r):
+		cap_kern = np.zeros([dr, dr])
+		X, Y = np.meshgrid(np.arange(dr), np.arange(dr))
+		dist = np.sqrt((X - int(np.rint((dr-1) / 2)))**2 + (Y - int(np.rint((dr-1) / 2)))**2) * pix_res
+		cap_kern[dist <= np.sqrt(2)*cap_r] = -pix_res**2	###negative portion of outer annulus to subtract
+		cap_kern[dist <= cap_r] = pix_res**2				###positive portion of inner circle to sum
+		return cap_kern
+
+	apertures=[cap_ap(r) for r in cap_radii_arcmin]
+	
+	if verbose:
+		print("cutout size and number of apertures: ",apertures[0].shape,len(apertures))
+
+	ap_vals=[]
+	if interpolate:	###bilinear interpolation
+		if plate_carree:	###i.e. ACT, so using pixell defined map instead
+			for c in range(cat_len):	###Cycling through catalog
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				cutout=map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+				temp=[]
+				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+					temp.append(np.sum(cutout * ap))
+				ap_vals.append(temp)
+				
+		else:
+			for c in range(cat_len):	###Cycling through catalog
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				cutout=hp.get_interp_val(map_data, t_set, p_set + np.pi / 2)
+				temp=[]
+				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+					temp.append(np.sum(cutout * ap))
+				ap_vals.append(temp)
+	else:
+		if plate_carree:
+			for c in range(cat_len):	###Cycling through catalog
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
+				cutout=map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+				temp=[]
+				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+					temp.append(np.sum(cutout * ap))
+				ap_vals.append(temp)
+		else:
+			for c in range(cat_len):	###Cycling through catalog
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				cutout=map_data[hp.ang2pix(nside, t_set, p_set)]
+				temp=[]
+				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+					temp.append(np.sum(cutout * ap))
+				ap_vals.append(temp)
+	
+	###into pandas table
+	ap_vals = pd.DataFrame(ap_vals, columns = ["%.3f"%cap + " [Arcmin]" for cap in cap_radii_arcmin])
+	###And save to a csv table.  
+	savefile = data_save_name + "_CAPs_%.2fpixres.csv"%(pix_res)
+	ap_vals.to_csv(savefile, sep=",", na_rep="  ")
+	# Personally I've preferred pickle (.pkl) for my work due to better read/write speed, but it has sharing/backward compatability issues
+	
+	if verbose:
+		print('savename: ', savefile)
+		print('PostStack check ', time.asctime())
+	
 	return None
 
-def CAP_Stack(mapfile,catfile,CAP_R_set,res,datasavename,alm_T_map_F=False,nside=8192,planck=False,version=0):	###[Arcmin,Arcmin]
-	print('StartTime: ',time.asctime())
-	###Getting catalog setup (takes decs and ras in radians)
-	if catfile[-3:]=='txt':
-		cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-		if len(cat.shape)==1:
-			clen=1
-			decs=[cat[2]]
-			ras=[cat[1]]
+def stack_radial_avg(
+		map_data, catalog_ra, catalog_dec, rad_avg_radii_arcmin, pix_res, data_save_name,
+    	plate_carree = False, nside = 8192, padding = 2, subtract_mean = True, interpolate = True, verbose = True):
+	"""Calculates the radial averages between provided radii around a catalog of points from a given map_data.  
+	Uses gnomonic projection cutouts.  Pandas dataframe saved as .csv
+	
+	Parameters
+	----------
+
+	mapdata: healpy or pixell map
+		If healpy, basically just a 12 * nside**2 length 1d array.  Similar array structure for pixell plate-carree maps I think?
+	catalog_ra: list or 1d array
+		Right ascensions (in Degrees) of catalog to stack. Should have same length as catalog_dec
+	catalog_dec: list or 1d array
+		Declinations (in Degrees) of catalog to stack. Should have same length as catalog_ra
+	rad_avg_radii_arcmin: list or numpy.ndarray
+		1d list or array of radial average radii edges/bounds (in arcmin).  Should have length >= 2
+	pix_res: int or float
+		Angular resolution of each stamp pixel, in units of arcminutes
+	data_save_name: str
+		Save name (and location) of output data.   "_radial_avg_%.2fpixres.csv" is added to the end
+	file_type: str
+		File type to write pandas table into, i.e. DataFrame.to_"file_type" (Default == "parquet", also used if unknown file_type is given)
+	plate_carree: bool
+		False (Default) == normally expect Healpix map projection. True == If provided mapdata is in Plate-Carree form
+	nside: int
+		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2 = npix). Only used if plate_carree = False
+	padding: int or float
+		(Default == 2) Extra padding in arcmin to add to cutout size. side_arcmin = 2*np.max(rad_avg_radii_arcmin) + padding
+	subtract_mean: bool
+		Subtracts mean of each cutout before applying apertures.  This can reduce large-scale flucuations (i.e. foregrounds, Default == True)
+	interpolate: bool
+		Whether to employ bi-linear interpolation.  Takes ~4x longer, but can *slightly* reduce noise or artificial pixelization (Default == True)
+	verbose: bool
+		prints additional outputs for logging and checks
+	
+	Returns
+	-------
+	None (data saved as csv file according to given data_save_name + "_CAPs_%.2fpixres.csv"%pix_res)
+
+	"""
+	
+	if verbose:
+		print('StartTime: ', time.asctime())	###For logging purposes
+	
+	###Dimension Checks
+	if len(catalog_dec) != len(catalog_ra):  ###Check catalog length
+		raise ValueError("lengths of catalog_dec and catalog_ra do not match!!")
+	if len(rad_avg_radii_arcmin) < 2:
+		raise ValueError("rad_avg_radii_arcmin must be at least length = 2 (i.e. defined EDGES to average between)")
+	
+	cat_len = len(catalog_dec)
+	if verbose:
+		print("Catalog length: %i"%cat_len)
+	
+	side_arcmin = 2*np.max(rad_avg_radii_arcmin) + padding		###as real max required would be 2*np.max(), so optional for extra padding
+
+	if verbose:
+		print('side arc check: ',side_arcmin)
+	dr = int(np.rint(side_arcmin/pix_res + 1))
+
+	def radial_avg_ap(r_min, r_max):
+		rad_avg_kern = np.full([dr, dr], np.nan)
+		X, Y = np.meshgrid(np.arange(dr), np.arange(dr))
+		dist = np.sqrt((X - int(np.rint((dr-1) / 2)))**2 + (Y - int(np.rint((dr-1) / 2)))**2) * pix_res
+		rad_avg_kern[(dist >= r_min) & (dist < r_max)] = 1		###Changing values equal/above rmin (to include 0), and below rmax
+		return rad_avg_kern
+
+	apertures=[radial_avg_ap(rad_avg_radii_arcmin[r], rad_avg_radii_arcmin[r + 1]) for r in range(len(rad_avg_radii_arcmin) - 1)]	###As radial edges are given
+	if verbose:
+		print("cutout size and number of apertures: ",apertures[0].shape, len(apertures))
+
+	columns = ["%.2f to %.2f [Arcmin]"%(rad_avg_radii_arcmin[r], rad_avg_radii_arcmin[r + 1]) for r in range(len(rad_avg_radii_arcmin) - 1)]
+	ap_vals=[]
+	###I despise this nesting of 3 if statements, but it seems like the method that doesn't introduce any unnecessary slowing that'd occur inside the for loops
+	# Feel free to modify this if there's a better way for you
+	if subtract_mean:
+		if interpolate:	###bilinear interpolation
+			if plate_carree:	###i.e. ACT, so using pixell defined map instead
+				for c in range(cat_len):	###Cycling through catalog
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+					cutout -= np.mean(cutout)
+					temp=[]
+					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+						temp.append(np.nanmean(cutout * ap))
+					ap_vals.append(temp)
+					
+			else:
+				for c in range(cat_len):	###Cycling through catalog
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					cutout = hp.get_interp_val(map_data, t_set, p_set + np.pi / 2)
+					cutout -= np.mean(cutout)
+					temp=[]
+					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+						temp.append(np.nanmean(cutout * ap))
+					ap_vals.append(temp)
 		else:
-			clen=len(cat)
-			decs=cat[:,2]
-			ras=cat[:,1]
-		cat=None;del cat	###To free up memory??
-	elif catfile[-3:]=='pkl':
-		cat=pd.read_pickle(catfile)
-		clen=len(cat)
-		ras=cat.iloc[:,0].to_numpy()
-		decs=cat.iloc[:,1].to_numpy()
-		cat=None;del cat	###To free up memory??
-	else:
-		print('Catalog file neither .txt or .pkl (pandas dataframe)...')
-		return None
-
-	###CHECK
-	print(clen)
-	print(np.max(decs),np.min(decs),np.max(ras),np.min(ras))	#Another validation check
-
-	if planck:		###Since I often have to save them as separate fits files that healpy sometimes doesn't like
-		m = astropy.io.fits.open(mapfile)
-		mapdata = np.asarray(np.ndarray.tolist(m[1].data))
-		mapdata=mapdata.reshape(np.prod(mapdata.shape),)	###Using np.prod so don't care about NSIDE anymore
-		nside=int(np.sqrt(len(mapdata)/12))
-		print('Planck Map, nside of %s predicted'%nside)
-		m = None; del m
-		r = hp.rotator.Rotator(coord=['G','C'])		###Since planck maps are often provided in galactic
-		mapdata=r.rotate_map_alms(mapdata)
-		print(mapdata.shape)
-	else:
-		if alm_T_map_F:
-			alm=hp.read_alm(mapfile)
-			mapdata=hp.alm2map(alm, nside)
+			if plate_carree:
+				for c in range(cat_len):	###Cycling through catalog
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
+					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+					cutout -= np.mean(cutout)
+					temp=[]
+					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+						temp.append(np.nanmean(cutout * ap))
+					ap_vals.append(temp)
+			else:
+				for c in range(cat_len):	###Cycling through catalog
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					cutout = map_data[hp.ang2pix(nside, t_set, p_set)]
+					cutout -= np.mean(cutout)
+					temp=[]
+					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+						temp.append(np.nanmean(cutout * ap))
+					ap_vals.append(temp)
+	else:	###no need to mean subtract, this should make it slighty? faster
+		if interpolate:	###bilinear interpolation
+			if plate_carree:	###i.e. ACT, so using pixell defined map instead
+				for c in range(cat_len):	###Cycling through catalog
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+					temp=[]
+					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+						temp.append(np.nanmean(cutout * ap))
+					ap_vals.append(temp)
+					
+			else:
+				for c in range(cat_len):	###Cycling through catalog
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					cutout = hp.get_interp_val(map_data, t_set, p_set + np.pi / 2)
+					temp=[]
+					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+						temp.append(np.nanmean(cutout * ap))
+					ap_vals.append(temp)
 		else:
-			mapdata=hp.read_map(mapfile)
-			nside=int(np.sqrt(len(mapdata)/12))
-			print('Healpy.read_map used, nside of %s predicted'%nside)
-	
+			if plate_carree:
+				for c in range(cat_len):	###Cycling through catalog
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
+					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+					temp=[]
+					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+						temp.append(np.nanmean(cutout * ap))
+					ap_vals.append(temp)
+			else:
+				for c in range(cat_len):	###Cycling through catalog
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					cutout = map_data[hp.ang2pix(nside, t_set, p_set)]
+					temp=[]
+					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
+						temp.append(np.nanmean(cutout * ap))
+					ap_vals.append(temp)
 
-	side_arcmin=3*np.max(CAP_R_set)
-	print('side arc check: ',side_arcmin)
-	DR=int(np.rint(side_arcmin/res+1))
-	
-	def CAP_Aps(CAP_R):
-		CAP_kern = np.zeros([DR,DR])
-		X,Y=np.meshgrid(np.arange(DR),np.arange(DR))
-		dist=np.sqrt((X-int(np.rint((DR-1)/2)))**2 + (Y-int(np.rint((DR-1)/2)))**2)*res
-		CAP_kern[dist<=np.sqrt(2)*CAP_R]=-res**2
-		CAP_kern[dist<=CAP_R]=res**2
-		return CAP_kern
 
-	t_s=time.time()
-	AP_set=[]
-	for r in CAP_R_set:
-		AP_set.append(CAP_Aps(r))
-	print(AP_set[0].shape,len(AP_set))
-	print('CAP create time: %s seconds for %i CAPs'%(time.time()-t_s,len(CAP_R_set))) ###TIME CHECK
-	# t_s=time.time()
-	# load_time=[]
-	AP_vals=[]
-	for c in range(clen)[:20]:
-		# lt=time.time()
-		t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-		stackset=mapdata[hp.ang2pix(nside,np.abs(t_set),p_set)]		###np.pi/2 bc mapdata.at requires declination input (not theta)
-		# load_time.append(time.time()-lt)
-		temp=[]
-		for a in AP_set:
-			temp.append(np.sum(stackset*a))	###creating list 'row'
-		AP_vals.append(temp)	###adding completed 'row' to master list
-	AP_vals=pd.DataFrame(AP_vals,columns=['%.3f'%CAP_R_set[i]+ ' [Arcmin]' for i in range(len(CAP_R_set))])		###Switching to pandas array, old version == #np.asarray(AP_vals)
-	
-	# ft=time.time()
-	# print('Total CUTOUT and CAP time: %s seconds per Galaxy'%((ft-t_s)/20))
-	# print('Average map CUTOUT ONLY time: %s seconds per Galaxy'%np.mean(load_time))
-	# print('Average CAP ONLY time: %s seconds per Galaxy per CAP (avg)'%((ft-t_s)/20/len(CAP_R_set)-np.mean(load_time)/len(CAP_R_set)))
-	# print(AP_vals)	###CHECK
-	
-	print(clen)
+	###into pandas table
+	ap_vals = pd.DataFrame(ap_vals, columns = columns)
+	###And save to a csv table.  
+	savefile = data_save_name + "_radial_avg_%.2fpixres.csv"%(pix_res)
+	ap_vals.to_csv(savefile, sep=",", na_rep="  ")
+	# Personally I've preferred pickle (.pkl) for my work due to better read/write speed, but it has sharing/backward compatability issues
 
-	####ensuring nothing is overwritten since data might differ
-	k=version
-	savefile='temp/'+datasavename+'_CAPs_%.2fres_v%i.pkl'%(res,k)
-	while os.path.isfile(savefile):
-		k+=1
-		savefile='temp/'+datasavename+'_CAPs_%.2fres_v%i.pkl'%(res,k)
-	print('savename: ',savefile)
-	AP_vals.to_pickle(savefile,protocol=4)		###Save...comment out if not needed/testing
-	print('PostStack check ',time.asctime())
-	###OLD VERSION
-	# np.savetxt(savefile,AP_vals,header='%s CAP Radiis,timestamp=%s'%(str(CAP_R_set),str(time.asctime())))
+	if verbose:
+		print('savename: ',savefile)
+		print('PostStack check ',time.asctime())
+	
 	return None
-
-def CAP_Stack_ReBeam(mapfile,catfile,CAP_R_set,res,datasavename,old_fwhm,new_fwhm,alm_T_map_F=False,nside=8192,planck=False,version=0):	###[Arcmin,Arcmin]
-	print('StartTime: ',time.asctime())
-	###Getting catalog setup (takes decs and ras in radians)
-	if catfile[-3:]=='txt':
-		cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-		if len(cat.shape)==1:
-			clen=1
-			decs=[cat[2]]
-			ras=[cat[1]]
-		else:
-			clen=len(cat)
-			decs=cat[:,2]
-			ras=cat[:,1]
-		cat=None;del cat	###To free up memory??
-	elif catfile[-3:]=='pkl':
-		cat=pd.read_pickle(catfile)
-		clen=len(cat)
-		ras=cat.iloc[:,0].to_numpy()
-		decs=cat.iloc[:,1].to_numpy()
-		cat=None;del cat	###To free up memory??
-	else:
-		print('Catalog file neither .txt or .pkl (pandas dataframe)...')
-		return None
-
-	###CHECK
-	print(clen)
-	print(np.max(decs),np.min(decs),np.max(ras),np.min(ras))	#Another validation check
-
-	if planck:		###Since I often have to save them as separate fits files that healpy sometimes doesn't like
-		m = astropy.io.fits.open(mapfile)
-		mapdata = np.asarray(np.ndarray.tolist(m[1].data))
-		mapdata=mapdata.reshape(np.prod(mapdata.shape),)	###Using np.prod so don't care about NSIDE anymore
-		nside=int(np.sqrt(len(mapdata)/12))
-		print('Planck Map, nside of %s predicted'%nside)
-		m = None; del m
-		r = hp.rotator.Rotator(coord=['G','C'])		###Since planck maps are often provided in galactic
-		mapdata=r.rotate_map_alms(mapdata)
-		print(mapdata.shape)
-	else:
-		if alm_T_map_F:
-			alm=hp.read_alm(mapfile)
-			mapdata=hp.alm2map(alm, nside)
-		else:
-			mapdata=hp.read_map(mapfile)
-			nside=int(np.sqrt(len(mapdata)/12))
-			print('Healpy.read_map used, nside of %s predicted'%nside)
-
-
-	side_arcmin=3*np.max(CAP_R_set)+3*np.max([old_fwhm,new_fwhm])		###Padding by 3* max fwhm to negate edge effects
-	print('side arc check: ',side_arcmin)
-	DR=int(np.rint(side_arcmin/res+1))
-	stackset=np.zeros([DR,DR])
-	
-	def CAP_Aps(CAP_R):
-		CAP_kern = np.full([DR,DR],np.nan)
-		for x in range(DR):
-			for y in range(DR):
-				dist = np.sqrt((x-int(np.rint((DR-1)/2)))**2 + (y-int(np.rint((DR-1)/2)))**2 )
-				if dist <= CAP_R/res:
-					CAP_kern[x,y] = res**2
-				elif dist<=np.sqrt(2)*CAP_R/res:
-					CAP_kern[x,y] = -res**2
-		return CAP_kern
-
-	t_s=time.time()
-	AP_set=[]
-	for r in CAP_R_set:
-		AP_set.append(CAP_Aps(r))
-	print(AP_set[0].shape,len(AP_set))
-	print('CAP create time: %s seconds for %i CAPs'%(time.time()-t_s,len(CAP_R_set))) ###TIME CHECK
-	# t_s=time.time()
-	# load_time=[]
-	AP_vals=[]
-	for c in range(clen):
-		# lt=time.time()
-		t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-		stackset=mapdata[hp.ang2pix(nside,np.abs(t_set),p_set)]
-		stackset=change_gaussian_beam_map(stackset,res,old_fwhm,new_fwhm)
-		# load_time.append(time.time()-lt)
-		temp=[]
-		for a in AP_set:
-			temp.append(np.nansum(stackset*a))	###creating list 'row'
-		AP_vals.append(temp)	###adding completed 'row' to master list
-	AP_vals=pd.DataFrame(AP_vals,columns=['%.3f'%CAP_R_set[i]+ ' [Arcmin]' for i in range(len(CAP_R_set))])		###Switching to pandas array, old version == #np.asarray(AP_vals)
-	
-	# ft=time.time()
-	# print('Total CUTOUT and CAP time: %s seconds per Galaxy'%((ft-t_s)/20))
-	# print('Average map CUTOUT ONLY time: %s seconds per Galaxy'%np.mean(load_time))
-	# print('Average CAP ONLY time: %s seconds per Galaxy per CAP (avg)'%((ft-t_s)/20/len(CAP_R_set)-np.mean(load_time)/len(CAP_R_set)))
-	# print(AP_vals)	###CHECK
-	
-	print(clen)
-
-	####ensuring nothing is overwritten since data might differ
-	k=version
-	savefile='temp/'+datasavename+'_CAPs_%.2ffwhm_%.2fres_v%i.pkl'%(new_fwhm,res,k)
-	while os.path.isfile(savefile):
-		k+=1
-		savefile='temp/'+datasavename+'_CAPs_%.2ffwhm_%.2fres_v%i.pkl'%(new_fwhm,res,k)
-	print('savename: ',savefile)
-	AP_vals.to_pickle(savefile,protocol=4)		###Save...comment out if not needed/testing
-	print('PostStack check ',time.asctime())
-	###OLD VERSION
-	# np.savetxt(savefile,AP_vals,header='%s CAP Radiis,timestamp=%s'%(str(CAP_R_set),str(time.asctime())))
-	return None
-
-def Stack_radial_avg(mapfile,catfile,rad_edges,res,datasavename,alm_T_map_F=False,nside=8192,planck=False,version=0):		###[Arcmin, Arcmin]
-	'''Where rad_edges==list or numpy.ndarray of radial edges, i.e. radial averages taken between those values,
-	edges expected at no less than .1 intervals (%.1f column headers saved as)'''
-	print('StartTime: ',time.asctime())
-	###Getting catalog setup (takes decs and ras in radians)
-	if catfile[-3:]=='txt':
-		cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-		if len(cat.shape)==1:
-			clen=1
-			decs=[cat[2]]
-			ras=[cat[1]]
-		else:
-			clen=len(cat)
-			decs=cat[:,2]
-			ras=cat[:,1]
-		cat=None;del cat	###To free up memory??
-	elif catfile[-3:]=='pkl':
-		cat=pd.read_pickle(catfile)
-		clen=len(cat)
-		ras=cat.iloc[:,0].to_numpy()
-		decs=cat.iloc[:,1].to_numpy()
-		cat=None;del cat	###To free up memory??
-	else:
-		print('Catalog file neither .txt or .pkl (pandas dataframe)...')
-		return None
-	
-	if planck:		###Since I often have to save them as separate fits files that healpy sometimes doesn't like
-		m = astropy.io.fits.open(mapfile)
-		mapdata = np.asarray(np.ndarray.tolist(m[1].data))
-		print(mapdata.shape)
-		mapdata=mapdata.reshape(np.prod(mapdata.shape),)	###Using np.prod so don't care about NSIDE anymore
-		nside=int(np.sqrt(len(mapdata)/12))
-		print('Planck Map, nside of %s predicted'%nside)
-		m = None; del m
-		r = hp.rotator.Rotator(coord=['G','C'])		###Since planck maps are often provided in galactic
-		mapdata=r.rotate_map_alms(mapdata)
-		print(mapdata.shape)
-	else:
-		if alm_T_map_F:
-			alm=hp.read_alm(mapfile)
-			mapdata=hp.alm2map(alm, nside)
-		else:
-			mapdata=hp.read_map(mapfile)
-			nside=int(np.sqrt(len(mapdata)/12))
-			print('Healpy.read_map used, nside of %s predicted'%nside)
-
-	def rad_avgs(rmin,rmax):
-		radavg_kern = np.full([DR,DR],np.nan)
-		X,Y=np.meshgrid(np.arange(DR),np.arange(DR))
-		dist=np.sqrt((X-int(np.rint((DR-1)/2)))**2 + (Y-int(np.rint((DR-1)/2)))**2)*res
-		radavg_kern[(dist>=rmin)&(dist<rmax)]=1		###Changing values equal/above rmin (to include 0), and below rmax
-		return radavg_kern
-
-	side_arcmin=np.max(rad_edges)*2+2
-	DR=int(np.round(side_arcmin/res)+1)
-	stackset=np.zeros([DR,DR])
-	stacklen=len(stackset)
-	print(stacklen,stackset.shape)
-	rad_avg_set=[rad_avgs(rad_edges[r],rad_edges[r+1]) for r in range(len(rad_edges)-1)]
-	dataset=[]
-	h=['%.2f to %.2f [Arcmin]'%(rad_edges[r],rad_edges[r+1]) for r in range(len(rad_edges)-1)]
-
-	for c in range(clen):
-		t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-		stackset=mapdata[hp.ang2pix(nside,np.abs(t_set),p_set)]
-		stackset-=np.mean(stackset)				###Subtracting the mean
-		dataset.append([])
-		for rad in rad_avg_set:
-			dataset[c].append(np.nanmean(rad*stackset))
-	print(clen)
-	DF=pd.DataFrame(dataset,columns=h)	
-	# print(DF)
-	
-	####ensuring nothing is overwritten since data might differ
-	k=version
-	savefile='temp/'+datasavename+'_radavg_%.2fres_v%i.pkl'%(res,k)
-	while os.path.isfile(savefile):
-		k+=1
-		savefile='temp/'+datasavename+'_radavg_%.2fres_v%i.pkl'%(res,k)
-	print('savename: ',savefile)
-	DF.to_pickle(savefile,protocol=4)		###Save...comment out if not needed/testing
-	print('PostStack check ',time.asctime())
-	return None
-
-def Stack_radial_avg_interpolate(mapfile,catfile,rad_edges,res,datasavename,alm_T_map_F=False,nside=8192,planck=False,version=0):		###[Arcmin, Arcmin]
-	'''Where rad_edges==list or numpy.ndarray of radial edges, i.e. radial averages taken between those values,
-	edges expected at no less than .1 intervals (%.1f column headers saved as)'''
-	print('StartTime: ',time.asctime())
-	###Getting catalog setup (takes decs and ras in radians)
-	if catfile[-3:]=='txt':
-		cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-		if len(cat.shape)==1:
-			clen=1
-			decs=[cat[2]]
-			ras=[cat[1]]
-		else:
-			clen=len(cat)
-			decs=cat[:,2]
-			ras=cat[:,1]
-		cat=None;del cat	###To free up memory??
-	elif catfile[-3:]=='pkl':
-		cat=pd.read_pickle(catfile)
-		clen=len(cat)
-		ras=cat.iloc[:,0].to_numpy()
-		decs=cat.iloc[:,1].to_numpy()
-		cat=None;del cat	###To free up memory??
-	else:
-		print('Catalog file neither .txt or .pkl (pandas dataframe)...')
-		return None
-	
-	if planck:		###Since I often have to save them as separate fits files that healpy sometimes doesn't like
-		m = astropy.io.fits.open(mapfile)
-		mapdata = np.asarray(np.ndarray.tolist(m[1].data))
-		print(mapdata.shape)
-		mapdata=mapdata.reshape(np.prod(mapdata.shape),)	###Using np.prod so don't care about NSIDE anymore
-		nside=int(np.sqrt(len(mapdata)/12))
-		print('Planck Map, nside of %s predicted'%nside)
-		m = None; del m
-		r = hp.rotator.Rotator(coord=['G','C'])		###Since planck maps are often provided in galactic
-		mapdata=r.rotate_map_alms(mapdata)
-		print(mapdata.shape)
-	else:
-		if alm_T_map_F:
-			alm=hp.read_alm(mapfile)
-			mapdata=hp.alm2map(alm, nside)
-		else:
-			mapdata=hp.read_map(mapfile)
-			nside=int(np.sqrt(len(mapdata)/12))
-			print('Healpy.read_map used, nside of %s predicted'%nside)
-
-	def rad_avgs(rmin,rmax):
-		radavg_kern = np.full([DR,DR],np.nan)
-		X,Y=np.meshgrid(np.arange(DR),np.arange(DR))
-		dist=np.sqrt((X-int(np.rint((DR-1)/2)))**2 + (Y-int(np.rint((DR-1)/2)))**2)*res
-		radavg_kern[(dist>=rmin)&(dist<rmax)]=1		###Changing values equal/above rmin (to include 0), and below rmax
-		return radavg_kern
-
-	side_arcmin=np.max(rad_edges)*2+2
-	DR=int(np.round(side_arcmin/res)+1)
-	stackset=np.zeros([DR,DR])
-	stacklen=len(stackset)
-	print(stacklen,stackset.shape)
-	rad_avg_set=[rad_avgs(rad_edges[r],rad_edges[r+1]) for r in range(len(rad_edges)-1)]
-	dataset=[]
-	h=['%.2f to %.2f [Arcmin]'%(rad_edges[r],rad_edges[r+1]) for r in range(len(rad_edges)-1)]
-
-	for c in range(clen):
-		t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-		stackset=hp.get_interp_val(mapdata,np.abs(t_set),p_set)
-		stackset-=np.mean(stackset)				###Subtracting the mean
-		dataset.append([])
-		for rad in rad_avg_set:
-			dataset[c].append(np.nanmean(rad*stackset))
-	print(clen)
-	DF=pd.DataFrame(dataset,columns=h)	
-	# print(DF)
-	
-	####ensuring nothing is overwritten since data might differ
-	k=version
-	savefile='temp/'+datasavename+'_interpolated_radavg_%.2fres_v%i.pkl'%(res,k)
-	while os.path.isfile(savefile):
-		k+=1
-		savefile='temp/'+datasavename+'_interpolated_radavg_%.2fres_v%i.pkl'%(res,k)
-	print('savename: ',savefile)
-	DF.to_pickle(savefile,protocol=4)		###Save...comment out if not needed/testing
-	print('PostStack check ',time.asctime())
-	return None
-
-###Radial Average of annulus between rad_edges, after beam correction and mean subtraction
-def Stack_radial_avg_ReBeam(mapfile,catfile,rad_edges,res,datasavename,old_fwhm,new_fwhm,alm_T_map_F=False,nside=8192,planck=False,version=0):		###[Arcmin, Arcmin]
-	'''Where rad_edges==list or numpy.ndarray of radial edges, i.e. radial averages taken between those values, 
-	edges expected at no less than .1 intervals (%.1f column headers saved as)'''
-	print('StartTime: ',time.asctime())
-	###Getting catalog setup (takes decs and ras in radians)
-	if catfile[-3:]=='txt':
-		cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-		if len(cat.shape)==1:
-			clen=1
-			decs=[cat[2]]
-			ras=[cat[1]]
-		else:
-			clen=len(cat)
-			decs=cat[:,2]
-			ras=cat[:,1]
-		cat=None;del cat	###To free up memory??
-	elif catfile[-3:]=='pkl':
-		cat=pd.read_pickle(catfile)
-		clen=len(cat)
-		ras=cat.iloc[:,0].to_numpy()
-		decs=cat.iloc[:,1].to_numpy()
-		cat=None;del cat	###To free up memory??
-	else:
-		print('Catalog file neither .txt or .pkl (pandas dataframe)...')
-		return None
-	
-	if planck:		###Since I often have to save them as separate fits files that healpy sometimes doesn't like
-		m = astropy.io.fits.open(mapfile)
-		mapdata = np.asarray(np.ndarray.tolist(m[1].data))
-		print(mapdata.shape)
-		mapdata=mapdata.reshape(np.prod(mapdata.shape),)	###Using np.prod so don't care about NSIDE anymore
-		nside=int(np.sqrt(len(mapdata)/12))
-		print('Planck Map, nside of %s predicted'%nside)
-		m = None; del m
-		r = hp.rotator.Rotator(coord=['G','C'])		###Since planck maps are often provided in galactic
-		mapdata=r.rotate_map_alms(mapdata)
-		print(mapdata.shape)
-	else:
-		if alm_T_map_F:
-			alm=hp.read_alm(mapfile)
-			mapdata=hp.alm2map(alm, nside)
-		else:
-			mapdata=hp.read_map(mapfile)
-			nside=int(np.sqrt(len(mapdata)/12))
-			print('Healpy.read_map used, nside of %s predicted'%nside)
-
-	def rad_avgs(rmin,rmax):
-		radavg_kern = np.full([DR,DR],np.nan)
-		X,Y=np.meshgrid(np.arange(DR),np.arange(DR))
-		dist=np.sqrt((X-int(np.rint((DR-1)/2)))**2 + (Y-int(np.rint((DR-1)/2)))**2)*res
-		radavg_kern[(dist>=rmin)&(dist<rmax)]=1		###Changing values equal/above rmin (to include 0), and below rmax
-		return radavg_kern
-
-	side_arcmin=np.max(rad_edges)*2+2+3*np.max([old_fwhm,new_fwhm])
-	DR=int(np.round(side_arcmin/res)+1)
-	stackset=np.zeros([DR,DR])
-	stacklen=len(stackset)
-	print(stacklen,stackset.shape)
-	rad_avg_set=[rad_avgs(rad_edges[r],rad_edges[r+1]) for r in range(len(rad_edges)-1)]
-	dataset=[]
-	h=['%.2f to %.2f [Arcmin]'%(rad_edges[r],rad_edges[r+1]) for r in range(len(rad_edges)-1)]
-
-	for c in range(clen):
-		t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-		stackset=mapdata[hp.ang2pix(nside,np.abs(t_set),p_set)]
-		stackset=change_gaussian_beam_map(stackset,res,old_fwhm,new_fwhm)
-		stackset-=np.mean(stackset)				###Subtracting the mean after beam change
-		dataset.append([])
-		for rad in rad_avg_set:
-			dataset[c].append(np.nanmean(rad*stackset))
-	print(clen)
-	DF=pd.DataFrame(dataset,columns=h)	
-	# print(DF)
-	
-	####ensuring nothing is overwritten since data might differ
-	k=version
-	savefile='temp/'+datasavename+'_radavg_%.2ffwhm_%.2fres_v%i.pkl'%(new_fwhm,res,k)
-	while os.path.isfile(savefile):
-		k+=1
-		savefile='temp/'+datasavename+'_radavg_%.2ffwhm_%.2fres_v%i.pkl'%(new_fwhm,res,k)
-	print('savename: ',savefile)
-	DF.to_pickle(savefile,protocol=4)		###Save...comment out if not needed/testing
-	print('PostStack check ',time.asctime())
-	return None
-
-
-###Gives RMS back
-def Stack_rms_only(mapfile,catfile,side_arcmins,res,datasavename,alm_T_map_F=False,nside=8192,planck=False,version=0):		###[Arcmin, Arcmin]
-	'''nside only needed i alm_T'''
-	print('StartTime: ',time.asctime())
-	###Getting catalog setup (takes decs and ras in radians)
-	if catfile[-3:]=='txt':
-		cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-		if len(cat.shape)==1:
-			clen=1
-			decs=[cat[2]]
-			ras=[cat[1]]
-		else:
-			clen=len(cat)
-			decs=cat[:,2]
-			ras=cat[:,1]
-		cat=None;del cat	###To free up memory??
-	elif catfile[-3:]=='pkl':
-		cat=pd.read_pickle(catfile)
-		clen=len(cat)
-		ras=cat.iloc[:,0].to_numpy()
-		decs=cat.iloc[:,1].to_numpy()
-		cat=None;del cat	###To free up memory??
-	else:
-		print('Catalog file neither .txt or .pkl (pandas dataframe)...')
-		return None
-	
-	if planck:		###Since I often have to save them as separate fits files that healpy sometimes doesn't like
-		m = astropy.io.fits.open(mapfile)
-		mapdata = np.asarray(np.ndarray.tolist(m[1].data))
-		print(mapdata.shape)
-		mapdata=mapdata.reshape(np.prod(mapdata.shape),)	###Using np.prod so don't care about NSIDE anymore
-		nside=int(np.sqrt(len(mapdata)/12))
-		print('Planck Map, nside of %s predicted'%nside)
-		m = None; del m
-		r = hp.rotator.Rotator(coord=['G','C'])		###Since planck maps are often provided in galactic
-		mapdata=r.rotate_map_alms(mapdata)
-		print(mapdata.shape)
-	else:
-		if alm_T_map_F:
-			alm=hp.read_alm(mapfile)
-			mapdata=hp.alm2map(alm, nside)
-		else:
-			mapdata=hp.read_map(mapfile)
-			nside=int(np.sqrt(len(mapdata)/12))
-			print('Healpy.read_map used, nside of %s predicted'%nside)
-
-	if isinstance(side_arcmins,list):		###If given a list of side_arcmins, set side_arcmin as the max (since we can grab largest stamp size and then calculate rms of all side_arcmins from within that stamp)
-		print('list of side_arcs: ',side_arcmins)
-		side_arcmin=np.max(side_arcmins)
-		arclist=True 	###i.e. side_arcmins given as a list
-		h=['%.3f [Arcmin]'%a for a in np.sort(side_arcmins)]
-	else:
-		side_arcmin=side_arcmins
-		arclist=False
-		h=['%.3f [Arcmin]'%side_arcmin]
-	
-	DR=int(np.round(side_arcmin/res)+1)
-	stackset=np.zeros([DR,DR])
-	stacklen=len(stackset)
-	print(stacklen,stackset.shape)
-	l=np.arange(DR)
-	R=np.sqrt(np.sum(np.stack(np.array([*np.meshgrid(l-np.mean(l),l-np.mean(l))])**2),axis=0))
-	###Quick check
-	# plt.imshow(R)
-	# plt.savefig(time.strftime("RMS_test_on%Y-%m-%d_at%H_%M.png"))
-	# plt.close()
-
-	dataset=[]
-	if arclist:
-		for c in range(clen):
-			t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-			stackset=mapdata[hp.ang2pix(nside,np.abs(t_set),p_set)]
-			dataset.append([])
-			for a in np.sort(side_arcmins):
-				dataset[c].append(np.std(stackset[R<=a]))
-				###Old way
-				# index=int((side_arcmin-a)/2/res)		###(+1 cancels out on difference)
-				# dataset[c].append(np.std(stackset[index:stacklen-index]))
-	else:
-		for c in range(clen):
-			t_set,p_set=gnomonic(decs[c],ras[c],res,sidesize=side_arcmin)
-			stackset=mapdata[hp.ang2pix(nside,np.abs(t_set),p_set)]
-			dataset.append(np.std(stackset[R<=side_arcmin]))
-	print(clen)
-	DF=pd.DataFrame(dataset,columns=h)	
-	# print(DF)
-	
-	####ensuring nothing is overwritten since data might differ
-	k=version
-	savefile='temp/'+datasavename+'_RMS_%.2fres_v%i.pkl'%(res,k)
-	while os.path.isfile(savefile):
-		k+=1
-		savefile='temp/'+datasavename+'_RMS_%.2fres_v%i.pkl'%(res,k)
-	print('savename: ',savefile)
-	DF.to_pickle(savefile,protocol=4)		###Save...comment out if not needed/testing, protocol=4 for back-compatability
-	print('PostStack check ',time.asctime())
-	return None
-
-####Old method (with reproject.thumbnails)
-# def Stack(mapfile,catfile,side_arcmin,res,datasavename):	###[Arcmin,Arcmin]
-# 	print('StartTime: ',time.asctime())
-# 	###Getting catalog setup (takes decs and ras in radians)
-# 	cat = np.genfromtxt(catfile) #Designed for array file with inner array for each galaxy/cluster, indices 1 and 2 are RA and DEC, respectively (where I have index 0 as galaxy #)
-# 	if len(cat.shape)==1:
-# 		clen=1
-# 		decs=[np.deg2rad(cat[2])]
-# 		ras=[np.deg2rad(cat[1])]
-# 	else:
-# 		clen=len(cat)
-# 		decs=np.deg2rad(cat[:,2])
-# 		ras=np.deg2rad(cat[:,1])
-# 	cat=None;del cat	###To free up memory??
-
-# 	mapdata=enmap.read_map(mapfile)
-# 	stackset=np.zeros([int(np.round(side_arcmin/res)+1),int(np.round(side_arcmin/res)+1)])
-# 	side_r=np.deg2rad(side_arcmin/2/60)
-# 	res=np.deg2rad(res/60)
-	
-# 	if stackset.shape != reproject.thumbnails(mapdata,coords=[decs[0],ras[0]],r=side_r,res=res).shape:
-# 		print('STUPID PIXELL ARRAY SIZE AINT SQUARE')
-# 		return None
-	
-# 	for c in range(clen):
-# 		stackset+=reproject.thumbnails(mapdata,coords=[decs[c],ras[c]],r=side_r,res=res)
-# 	print(clen)
-# 	savefile='temp/'+datasavename+'_%.2farcmin_%.2fres.txt'%(side_arcmin,60*np.deg2rad(res))
-# 	np.savetxt(savefile,stackset)
-# 	print('PostStack check ',time.asctime())
-# 	return None
-
-
-###CAP SIZE TESTING
-# res=0.05
-# CAP_R_set=np.arange(1,6.21,0.2)
-# side_arcmin=3*np.max(CAP_R_set)
-# print('side arc check: ',side_arcmin)
-# DR=int(np.rint(np.round(side_arcmin/res)+1))
-# stackset=np.zeros([DR,DR])
-
-# def CAP_Aps(CAP_R):
-# 	CAP_kern = np.full([DR,DR],np.nan)
-# 	for x in range(DR):
-# 		for y in range(DR):
-# 			dist = np.sqrt((x-int(np.rint((DR-1)/2)))**2 + (y-int(np.rint((DR-1)/2)))**2 )
-# 			if dist <= CAP_R/res:
-# 				CAP_kern[x,y] = res**2
-# 			elif dist<=np.sqrt(2)*CAP_R/res:
-# 				CAP_kern[x,y] = -res**2
-# 	return CAP_kern
-
-# print(np.max(CAP_R_set))
-# plt.imshow(CAP_Aps(np.max(CAP_R_set)))
-# plt.show()

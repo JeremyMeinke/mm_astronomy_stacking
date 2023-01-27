@@ -4,4 +4,17 @@
 data/combined_map_95GHz_nside8192_ptsrcmasked_50mJy.fits
 data/combined_map_150GHz_nside8192_ptsrcmasked_50mJy.fits
 data/combined_map_220GHz_nside8192_ptsrcmasked_50mJy.fits
+data/alm_combined_data_95GHz_ptsrcmasked_50mJy.fits
+data/alm_combined_data_150GHz_ptsrcmasked_50mJy.fits
+data/alm_combined_data_220GHz_ptsrcmasked_50mJy.fits
+data/2500d_cluster_sample_Bocquet19.fits
 
+
+###pycaches just to be safe
+./__pycache__/
+
+###analysis_code 
+analysis_code/__pycache__/
+
+###stacking_code
+stacking_code/__pycache__/
