@@ -3,93 +3,299 @@ import numpy as np
 import healpy as hp
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import uncertainties as u
-import os.path
 import scipy.integrate as spint
 import scipy.ndimage as spi
 from scipy.optimize import curve_fit
-from scipy.signal import convolve2d
-import scipy.stats as stats
 from astropy.cosmology import LambdaCDM
 import pandas as pd
-import pickle5 as pickle
-# import astropy
-# from photutils import CircularAperture, aperture_photometry
 import math
 import scipy.special as spsp
-#import lmfit
 import time
 import warnings
 import gc
 from typing import Any, Callable
 
-# import Healpix_Stack_New as HS
-###Copy this into files that import this:
-##Noise(Image, pixres, centerdrop_rad, outerdrop_rad): np.round(rms, 4)
-##GFilter(Image, pixres, High_fwhm, Low_fwhm): New Image (Filtered)
-##MFilter(Image, pixres, centerdrop_rad): Ditto
-##GConv(Image, pixres, g_fwhm, beam_fwhm): Center Value calculated, Noise outside center, Convolved Image
-##THConv(Image, pixres, TH_rad, pix_noise): TH center value calculated, TH_Noise calculated (wrong?)
-##THConv2(Image, pixres, TH_rad): TH Center Value Calculated, Noise outside center, Convolved Image
-##GFit(Image, pixres, fwhm): saves ./temp/Gfit.png file, returns popt, pcov, noise_rms
-##SZ_Beta(freqs, vals, val_sigs, T_dust, z, RJ): popt, pcov (RJ=T/F)
-##MultiStackPlot(values, NSIDE, search_arcmin, circlearc, subtitles, outname, outloc, K_r, y): Saves plot, no return
-##------------------------------------------------------
 
-def pickle_load(pickle_filename):
-	if os.path.isfile(pickle_filename):
-		try:
-			temp=pd.read_pickle(pickle_filename)
-		except:		###assuming if an error arises, pickle protocol 5 is to blame
-			with open(pickle_filename,"rb") as ct:
-				print(ct)
-				temp=pickle.load(ct)
-		return temp
+
+def angdiff(RA1, DEC1, RA2, DEC2, degrees = False):
+	"""angle betwix locations.  Set degrees = True if input/output are in degrees"""
+	if degrees:
+		RA1 = np.deg2rad(RA1); DEC1 = np.deg2rad(DEC1); RA2 = np.deg2rad(RA2); DEC2 = np.deg2rad(DEC2)
+		a = 2 * np.arcsin(np.sqrt(np.sin((DEC1-DEC2) / 2)**2 + np.cos(DEC1)*np.cos(DEC2)*np.sin((RA1-RA2) / 2)**2)) ##angle betwix locations, in radians
+		return np.rad2deg(a)
 	else:
-		print('Pickle File "%s" does not exist....... likely gonna throw an error further down....'%pickle_filename)
-		return None
+		a = 2 * np.arcsin(np.sqrt(np.sin((DEC1-DEC2) / 2)**2 + np.cos(DEC1)*np.cos(DEC2)*np.sin((RA1-RA2) / 2)**2)) ##angle betwix locations, in radians
+		return a
 
-def angdiff_deg(RA1, DEC1, RA2, DEC2):
-	a = 2*np.arcsin(np.sqrt(np.sin((DEC1-DEC2)*np.pi/180/2)**2+np.cos(DEC1*np.pi/180)*np.cos(DEC2*np.pi/180)*np.sin((RA1-RA2)*np.pi/180/2)**2)) ##angle betwix locations, in radians
-	return np.rad2deg(a)
-
-def angdiff_rad(RA1, DEC1, RA2, DEC2):
-	a = 2*np.arcsin(np.sqrt(np.sin((DEC1-DEC2)/2)**2+np.cos(DEC1)*np.cos(DEC2)*np.sin((RA1-RA2)/2)**2)) ##angle betwix locations, in radians
-	return a
-
-def df_compare_dupIndices(df1,df2,cols):	###Identifies identical locations of 2 catalogs that may have different indices
+def df_compare_dup_indices(df1, df2, cols):	###Identifies identical locations of 2 catalogs that may have different indices
 	'''To find indices (by both dfs) for rows that appear in both dfs, 
-	ONLY VALID IF df1 AND df2 DON'T CONTAIN ANY DUPLICATES ALREADY'''
+	ONLY VALID IF df1 AND df2 DON'T INDIVIDUALLY CONTAIN ANY DUPLICATES ALREADY'''
 	###For first df
-	df_comb1=pd.concat([df2,df1]) ###add df1 to df2
-	df1_inds=df_comb1[df_comb1.duplicated(cols)==True].index	###find indices for duplicates (that would exist only in the added df1 part)
+	df_comb1 = pd.concat([df2, df1]) ###add df1 to df2
+	df1_inds = df_comb1[df_comb1.duplicated(cols) == True].index	###find indices for duplicates (that would exist only in the added df1 part)
 
-	df_comb2=pd.concat([df1,df2]) ###add df2 to df1
-	df2_inds=df_comb2[df_comb2.duplicated(cols)==True].index	###find indices for duplicates (that would exist only in the added df2 part)
+	df_comb2=pd.concat([df1, df2]) ###add df2 to df1
+	df2_inds=df_comb2[df_comb2.duplicated(cols) == True].index	###find indices for duplicates (that would exist only in the added df2 part)
 	
 	return df1_inds, df2_inds
 
-def df_cat_within(df,ra_mins,ra_maxs,dec_mins,dec_maxs,col_start=0):	###Grabs subset of catalog within a given RA and DEC range
-	'''Assuming RA and DEC are the first [0] and second [1] columns of dataframe '''
+def df_cat_within(df, ra_mins, ra_maxs, dec_mins, dec_maxs, col_start = 0):	###Grabs subset of catalog within a given RA and DEC range
+	'''Select Assuming RA and DEC are the first [0] and second [1] columns of dataframe '''
 	cols=list(df.columns)
-	print(cols)
-	print(cols[0],cols[1],cols[2])
-	if len(ra_mins)!=len(ra_mins) or len(dec_mins)!=len(dec_mins) or len(ra_mins)!=len(dec_mins):
-		print("Equal number of RA and DEC bounds required")
+	print("Columns: ", cols, "\n")
+	if (len(ra_mins) != len(ra_maxs)) or (len(dec_mins) != len(dec_maxs)) or (len(ra_mins) != len(dec_mins)):
+		print("Equal number of RA and DEC bounds required (Make squares)")
 	else:
-		bnd_bools=[]
+		bnd_bools = []
 		for i in range(len(ra_mins)):
-			# print(((df[cols[0]]%360>=ra_mins[i]%360)&(df[cols[0]]%360<=ra_maxs[i]%360)&(df[cols[1]]>=dec_mins[i])&(df[cols[1]]<=dec_maxs[i])).shape)
-			# print(np.sum(((df[cols[0]]%360>=ra_mins[i]%360)&(df[cols[0]]%360<=ra_maxs[i]%360)&(df[cols[1]]>=dec_mins[i])&(df[cols[1]]<=dec_maxs[i]))))
-			bnd_bools.append((df[cols[col_start]]%360>=ra_mins[i]%360)&(df[cols[col_start]]%360<=ra_maxs[i]%360)&(df[cols[1+col_start]]>=dec_mins[i])&(df[cols[1+col_start]]<=dec_maxs[i]))
-		bnd_bools=np.asarray(bnd_bools)
-		# print(bnd_bools.shape)
-		# print(np.any(bnd_bools,axis=0).shape)
-		new_df=df[np.any(bnd_bools,axis=0)]
-	# print(new_df)	###Check
+			bnd_bools.append((df[cols[col_start]]%360 >= ra_mins[i]%360) & (df[cols[col_start]]%360 <= ra_maxs[i]%360) & (df[cols[1 + col_start]] >= dec_mins[i]) & (df[cols[1 + col_start]] <= dec_maxs[i]))
+		bnd_bools = np.asarray(bnd_bools)
+		new_df = df[np.any(bnd_bools, axis = 0)]
 	return new_df
 
-def Noise(Image, pixres, innerdrop_rad, outerdrop_rad):
+###From CMB_School_Part_03
+def make_2d_gaussian_beam(N, pix_res, fwhm):
+	"""Creates a 2d gaussian beam of size N x N.  pix_res and fwhm should be the same units.
+
+	Parameters
+	----------
+	N: int
+		Side/size of 2d grid desired.
+	pix_res: int or float
+		Pixel resolution of desired grid.  Same units as fwhm
+	fwhm: int or float
+		Gaussian fwhm desired.  Same units as pix_res
+	
+	Returns
+	-------
+	2d numpy.ndarray
+		2d Gaussian grid.
+	
+	"""
+	# make a 2d coordinate system
+	N=int(N)	###Ensures integer form
+	ones = np.ones(N)
+	inds  = (np.arange(N) + 0.5 - N/2.) * pix_res
+	X = np.outer(ones, inds)
+	Y = np.transpose(X)
+	R = np.sqrt(X**2. + Y**2.)
+	# make a 2d gaussian 
+	beam_sigma = fwhm / np.sqrt(8.*np.log(2))
+	gaussian = np.exp(-.5 * (R/beam_sigma)**2.)
+	gaussian = gaussian / np.sum(gaussian)
+	# return the gaussian
+	return gaussian
+
+def GFilter(stamp, pix_res, high_fwhm, low_fwhm):
+	"""2d gaussian filtering of a stamp cutout.
+
+	Parameters
+	----------
+	stamp: numpy.ndarray
+		Cutout or stamp.  Preferably of a symmetric N x N size.
+	pix_res: int or float
+		angular resolution of each stamp pixel.  Must have same units as map_beam_fwhm and new_beam_fwhm.
+	
+	Returns
+	-------
+	numpy.ndarray
+		Gaussian filtered stamp same size as input
+	"""
+	f2s = 1 / (2*np.sqrt(np.log(4)))	
+	high_sig = f2s * high_fwhm / pix_res
+	if high_fwhm != 0:
+		remove = spi.gaussian_filter(stamp, sigma=high_sig)
+		new_stamp = stamp - remove
+	else:
+		new_stamp = np.array(stamp)
+		
+	low_sig = f2s * low_fwhm / pix_res
+	if low_fwhm != 0:
+		new_stamp = spi.gaussian_filter(new_stamp, sigma=low_sig)
+	
+	return new_stamp
+
+def change_stamp_gaussian_beam(stamp, pix_res, map_beam_fwhm, new_beam_fwhm, fft_cut_both = True, cut_val = 0.25):
+	"""Changes a cutout/stamp's Gaussian beam pattern.  **Doesn't take projections into account**  
+	If an entire map is needed to be converted, I suggest using healpix or pixell functions.
+	
+	Parameters
+	----------
+	stamp : numpy array
+		cutout or stamp. Needs to be symmetric N x N size
+	pix_res: int or float
+		angular resolution of each stamp pixel.  Must have same units as map_beam_fwhm and new_beam_fwhm.
+	map_beam_fwhm: int or float
+		Original resolution of map cut from.  Must have same units as pix_size and new_beam_fwhm.
+	new_beam_fwhm: int or float
+		New desired resolution of stamp.  Must have same units as pix_size and map_beam_fwhm.
+	fft_cut_both: bool, optional
+		Option if apply an cut in fft space to prevent spurious noise (Default == True)
+	cut_val: float, optional
+		Fft value to apply cut below of. (Default == 0.25)
+
+	Returns
+	-------
+	numpy.ndarray
+		Same size as input stamp (N x N)	
+	"""
+	
+	###NEW NEW METHOD using fft
+	if map_beam_fwhm > new_beam_fwhm:
+		# make a 2d gaussian of the map beam
+		map_gaussian = make_2d_gaussian_beam(len(stamp),pix_res,map_beam_fwhm)	###Since needs to match size
+		new_gaussian = make_2d_gaussian_beam(len(stamp),pix_res,new_beam_fwhm)	###Since needs to match size
+		# do the convolution
+		map_ft_gaussian=np.fft.fft2(np.fft.fftshift(map_gaussian)) # first add the shift so that it isredeconvolved-rstacks[f] central
+		new_ft_gaussian=np.fft.fft2(np.fft.fftshift(new_gaussian)) # first add the shift so that it is central
+		if fft_cut_both:			###Can't decide if cutting both off at the same frequency location or at 1/sigma location is better
+			new_ft_gaussian[map_ft_gaussian < cut_val] = np.min(np.real(new_ft_gaussian[map_ft_gaussian > cut_val]))
+		else:
+			new_ft_gaussian[map_ft_gaussian < cut_val] = cut_val
+		
+		map_ft_gaussian[map_ft_gaussian < cut_val] = cut_val
+		ft_Map = np.fft.fft2(np.fft.fftshift(stamp)) #shift the map too
+		fft_final = ft_Map * np.real(new_ft_gaussian) / np.real(map_ft_gaussian)
+		deconvolved_map = np.fft.fftshift(np.real(np.fft.ifft2(fft_final)))
+	else:
+		deconvolved_map = GFilter(stamp, pix_res, 0, np.sqrt(new_beam_fwhm**2 - map_beam_fwhm**2))
+	
+	return deconvolved_map
+
+def remove_gradient(image, pix_res = 0.05, center_cut_dist = 0):
+	"""Uses GLS to fit and remove a gradient from 2d matrix/image.
+	Where center_cut_dist == distance from center to cut (center_cut_dist/pix_res pixels)
+	Returns same sized array as input image
+	
+	Parameters
+	----------
+	
+	image: numpy.ndarray
+		2D numpy array to have gradient removed
+	pix_res: float, optional
+		pixel resolution of image.  Only used if cutting a central signal/source desired not the fit in gradient
+	center_cut_dist: int or float, optional
+		Distance from the center desired to cut (same units as pix_res).  The cut distance will not be fit to gradient
+	
+	Returns
+	-------
+	2D numpy.ndarray, same size as image
+	
+	"""
+
+	DR=len(image)
+	X, Y = np.meshgrid(np.arange(DR), np.arange(DR))
+	mask_kern = np.ones([DR, DR])
+
+	###Make center cut if required
+	if center_cut_dist > 0:
+		dist = np.sqrt((X - int(np.rint((DR-1) / 2)))**2 + (Y - int(np.rint((DR-1) / 2)))**2) * pix_res
+		mask_kern[dist < center_cut_dist] = np.nan
+	
+	mask_image = mask_kern * image
+	###Now to average along each direction, fit a linear slope, and remove from image
+	###axis=0 first (X)
+	avg_x = np.nanmean(mask_image, axis = 0)
+	x_matrix = np.column_stack([X[0,:], np.ones_like(avg_x)])
+	y_vector = np.array([avg_x,]).T
+	N = len(y_vector)
+	fit = np.linalg.inv(x_matrix.T @ x_matrix) @ x_matrix.T @ y_vector
+	# scale = (y_vector - x_matrix@fit).T @ (y_vector - x_matrix@fit) / (N - len(fit))
+	# fitcov = np.linalg.inv(x_matrix.T @ x_matrix) * scale
+	# print("X fit and cov: ",fit,fitcov)
+	image = image - (X*fit[0] + fit[1])
+
+	###axis=1 Second (Y)
+	mask_image = mask_image - (X*fit[0] + fit[1])
+	avg_y = np.nanmean(mask_image, axis = 1)
+	x_matrix = np.column_stack([Y[:,0], np.ones_like(avg_y)])
+	y_vector = np.array([avg_y,]).T
+	N = len(y_vector)
+	fit = np.linalg.inv(x_matrix.T @ x_matrix) @ x_matrix.T @ y_vector
+	# scale = (y_vector - x_matrix@fit).T @ (y_vector - x_matrix@fit) / (N - len(fit))
+	# fitcov=np.linalg.inv(x_matrix.T @ x_matrix) * scale
+	# print("Y fit and cov: ",fit,fitcov)
+	image = image - (Y*fit[0] + fit[1])
+	return image
+
+def radial_avg(stamp, rad_avg_radii, pix_res = 0.05, pix_scale = False):
+	"""Calculate radial average(s) on a given stamp, for desired radial edges.  
+	Returns a list of radial averages.
+	
+	Parameters
+	----------
+	stamp: numpy.ndarray
+		2D numpy array stamp to be measured
+	rad_avg_radii: list or numpy.ndarray
+		List or 1d array of desired radial average edges to calculate within.  Must be same units as pix_res
+	pix_res: float, optional
+		Pixel resolution of stamp.  Must be same units as rad_avg_radii (Default == 0.05)
+	pix_scale: bool, optional
+		Pixel scaling, i.e. if desired to be scaled by pixel area (Default == False, since it's an average)
+	
+	Returns
+	-------
+	list, of size len(rad_avg_radii) - 1
+
+	"""
+	if pix_scale:
+		scale = pix_res**2
+	else:
+		scale = 1
+	
+	DR=len(stamp)
+	def radial_avg_ap(r_min, r_max):
+		rad_avg_kern = np.full([DR, DR], np.nan)
+		X, Y = np.meshgrid(np.arange(DR), np.arange(DR))
+		dist = np.sqrt((X - int(np.rint((DR-1) / 2)))**2 + (Y - int(np.rint((DR-1) / 2)))**2) * pix_res
+		rad_avg_kern[(dist >= r_min) & (dist < r_max)] = scale		###Changing values equal/above rmin (to include 0), and below rmax
+		return rad_avg_kern
+	
+	rad_avgs = [np.nanmean(stamp*radial_avg_ap(rad_avg_radii[r], rad_avg_radii[r+1])) for r in range(len(rad_avg_radii) - 1)]
+	return rad_avgs
+
+def gaussian_aperture_sum(stamp, pix_res, fwhm):
+	"""Sum within a (normalized) gaussian aperture on a given stamp.  pix_res and fwhm should have the same units.
+	Returns float"""
+	DR = len(stamp)
+	gaussian_kernel = make_2d_gaussian_beam(DR, pix_res, fwhm)
+	return np.sum(gaussian_kernel * stamp)
+
+def tophat_aperture_sum(stamp, pix_res, th_rad, pix_scale = True):
+	"""Returns tophat sum around given stamp. pix_res and th_rad should have the same units.
+	if pix_scale == True, takes pixel area/resolution into account"""
+
+	if pix_scale:
+		scale = pix_res**2
+	else:
+		scale = 1
+	
+	DR = len(stamp)
+	tophat_kern = np.full([DR, DR], np.nan)
+	X, Y = np.meshgrid(np.arange(DR), np.arange(DR))
+	dist = np.sqrt((X - int(np.rint((DR-1) / 2)))**2 + (Y - int(np.rint((DR-1) / 2)))**2) * pix_res
+	tophat_kern[dist <= th_rad] = scale
+	return np.nansum(tophat_kern * stamp)
+
+###Tophat minus annulus aperture sum like the ACT paper (Schaan, et. al., 2021)
+def cap_circular_aperture_sum(stamp, pix_res, cap_rad, pix_scale = True):
+	"""Returns CAP sum around given stamp. pix_res and cap_rad should have the same units.
+	if pix_scale == True, takes pixel area/resolution into account"""
+	
+	if pix_scale:
+		scale = pix_res**2
+	else: 
+		scale = 1
+	
+	DR = len(stamp)
+	cap_kern = np.full([DR, DR], np.nan)
+	X, Y = np.meshgrid(np.arange(DR), np.arange(DR))
+	dist = np.sqrt((X - int(np.rint((DR-1) / 2)))**2 + (Y - int(np.rint((DR-1) / 2)))**2) * pix_res
+	cap_kern[dist <= np.sqrt(2) * cap_rad] = -scale
+	cap_kern[dist <= cap_rad] = scale
+	return np.nansum(cap_kern * stamp)
+
+def noise(Image, pixres, innerdrop_rad, outerdrop_rad):
 	l = len(Image)
 	c = int((l-1)/2)
 	add = 0
@@ -117,268 +323,14 @@ def Noise(Image, pixres, innerdrop_rad, outerdrop_rad):
 	#print(rms)
 	return np.round(std, 4), np.round(mean/npix*10**6,4)
 
-def make_2d_gaussian_beam(N,pix_size,fwhm):
-     # make a 2d coordinate system
-    N=int(N)
-    ones = np.ones(N)
-    inds  = (np.arange(N)+.5 - N/2.) * pix_size
-    X = np.outer(ones,inds)
-    Y = np.transpose(X)
-    R = np.sqrt(X**2. + Y**2.)
-    #plt.title('Radial coordinates')
-    #plt.imshow(R)
-  
-    # make a 2d gaussian 
-    beam_sigma = fwhm / np.sqrt(8.*np.log(2))
-    gaussian = np.exp(-.5 *(R/beam_sigma)**2.)
-    gaussian = gaussian / np.sum(gaussian)
-    # return the gaussian
-    #plt.imshow(gaussian)
-    return(gaussian)
-
-def GFilter(Image, pixres, High_fwhm, Low_fwhm):			##fwhm and pixres in same units
-	f2s = 1 / (2 * np.sqrt(np.log(4)) )	
-	high_sig = f2s*High_fwhm/pixres
-	if High_fwhm != 0:
-		remove = spi.gaussian_filter(Image, sigma=high_sig)
-		new = Image-remove
-	else:
-		new = np.array(Image)
-		
-	low_sig = f2s*Low_fwhm/pixres
-	if Low_fwhm != 0:
-		new = spi.gaussian_filter(new, sigma=low_sig)
-	
-	return new
-
-def change_gaussian_beam_map(Map,pix_size,map_beam_fwhm,new_beam_fwhm,both=True):
-	"deconvolves a map with a Gaussian beam pattern.  NOTE: pix_size and beam_fwhm need to be in the same units" 
-	
-	###Plot Checking
-	# print(new_FT_gaussian.shape)
-	# plt.imshow(np.real(new_FT_gaussian/map_FT_gaussian))
-	# plt.imshow(np.real(np.fft.fftshift(new_FT_gaussian)))
-	# plt.show()
-	
-	###NEW NEW METHOD
-	if map_beam_fwhm>new_beam_fwhm:
-		# make a 2d gaussian of the map beam
-		map_gaussian = make_2d_gaussian_beam(len(Map),pix_size,map_beam_fwhm)	###Since needs to match size of Map
-		new_gaussian = make_2d_gaussian_beam(len(Map),pix_size,new_beam_fwhm)	###Since needs to match size of Map
-		# do the convolution
-		map_FT_gaussian=np.fft.fft2(np.fft.fftshift(map_gaussian)) # first add the shift so that it isredeconvolved-rstacks[f] central
-		new_FT_gaussian=np.fft.fft2(np.fft.fftshift(new_gaussian)) # first add the shift so that it is central
-		g_val=0.25
-		if both:			###Can't decide if cutting both off at the same frequency location or at 1/sigma location is better, defaulting to both=True
-			new_FT_gaussian[map_FT_gaussian<g_val]=np.min(np.real(new_FT_gaussian[map_FT_gaussian>g_val]))
-		else:
-			new_FT_gaussian[map_FT_gaussian<g_val]=g_val
-		
-		map_FT_gaussian[map_FT_gaussian<g_val]=g_val
-		FT_Map=np.fft.fft2(np.fft.fftshift(Map)) #shift the map too
-		fft_final=FT_Map*np.real(new_FT_gaussian)/np.real(map_FT_gaussian)
-		# print(np.max(fft_final))
-		deconvolved_map=np.fft.fftshift(np.real(np.fft.ifft2(fft_final)))
-	else:
-		deconvolved_map=GFilter(Map,pix_size,0,np.sqrt(new_beam_fwhm**2-map_beam_fwhm**2))
-	
-	return deconvolved_map
-
-####Function for desired filtering (Before any stat calculations)
-def GFilter(Image, pixres, High_fwhm, Low_fwhm):			##fwhm and pixres in same units
-	f2s = 1 / (2 * np.sqrt(np.log(4)) )	
-	high_sig = f2s*High_fwhm/pixres
-	if High_fwhm != 0:
-		remove = spi.gaussian_filter(Image, sigma=high_sig)
-		new = Image-remove
-	else:
-		new = np.array(Image)
-		
-	low_sig = f2s*Low_fwhm/pixres
-	if Low_fwhm != 0:
-		new = spi.gaussian_filter(new, sigma=low_sig)
-	
-	return new
-
-def RemoveGradient(Image,pixres=0.05,centerCutDist=0):
-	'''Where centerCutDist==distance from center to cut (centerCutDist/pixres pixels)'''
-	DR=len(Image)
-	X,Y=np.meshgrid(np.arange(DR),np.arange(DR))
-	Mask_kern = np.ones([DR,DR])
-	if centerCutDist>0:
-		dist=np.sqrt((X-int(np.rint((DR-1)/2)))**2 + (Y-int(np.rint((DR-1)/2)))**2)*pixres
-		Mask_kern[dist<centerCutDist]=np.nan
-	Mask_Image=Mask_kern*Image
-	###Now to average along each direction, fit a linear slope, and remove from image
-	###axis=0 first (X)
-	avgX=np.nanmean(Mask_Image,axis=0)
-	x_matrix=np.column_stack([X[0,:],np.ones_like(avgX)])
-	# print('x matrix: ',x_matrix)
-	y_vector=np.array([avgX,]).T
-	# print('x_matrix shape, y_vector shape',x_matrix.shape,y_vector.shape)	###CHECK
-	N=len(y_vector)
-	fit=np.linalg.inv(x_matrix.T@x_matrix)@x_matrix.T@y_vector
-	scale=(y_vector-x_matrix@fit).T@(y_vector-x_matrix@fit)/(N-len(fit))
-	# print(scale,scale.shape)
-	fitcov=np.linalg.inv(x_matrix.T@x_matrix)*scale
-	# print("X fit and cov: ",fit,fitcov)
-	Image=Image-(X*fit[0]+fit[1])
-	Mask_Image=Mask_Image-(X*fit[0]+fit[1])
-	###axis=1 Second (Y)
-	avgY=np.nanmean(Mask_Image,axis=1)
-	x_matrix=np.column_stack([Y[:,0],np.ones_like(avgY)])
-	# print('x matrix: ',x_matrix)
-	y_vector=np.array([avgY,]).T
-	# print('x_matrix shape, y_vector shape',x_matrix.shape,y_vector.shape)	###CHECK
-	N=len(y_vector)
-	fit=np.linalg.inv(x_matrix.T@x_matrix)@x_matrix.T@y_vector
-	scale=(y_vector-x_matrix@fit).T@(y_vector-x_matrix@fit)/(N-len(fit))
-	# print(scale,scale.shape)
-	fitcov=np.linalg.inv(x_matrix.T@x_matrix)*scale
-	# print("Y fit and cov: ",fit,fitcov)
-	Image=Image-(Y*fit[0]+fit[1])
-	return Image
-
-
-def RadAvg(Map,rads,pixres=0.05,pixscale=False):
-	DR=len(Map)
-	X,Y=np.meshgrid(np.arange(DR),np.arange(DR))
-	dist=np.sqrt((X-int(np.rint((DR-1)/2)))**2 + (Y-int(np.rint((DR-1)/2)))**2)*pixres
-	r_avgs=[]
-	for r in range(len(rads)-1):
-		RadAvg_kern = np.full([DR,DR],np.nan)	###Since I will be needing to average and want to not worry about averaging with zeros floating around
-		r_min=rads[r]
-		r_max=rads[r+1]
-		if pixscale:
-			RadAvg_kern[(dist<r_max)&(dist>=r_min)]=pixres**2
-		else:
-			RadAvg_kern[(dist<r_max)&(dist>=r_min)]=1
-		mean=np.nanmean(RadAvg_kern*Map)
-		r_avgs.append(mean)
-	return r_avgs
-
-####Function with signal + noise, taking some sort of convolution, noise outside center
-def GConv(Image, pixres, g_fwhm, beam_fwhm):	###Guassian convolved to find center value, returns convolved image, center pix value (in micro__ fwhm_dim^2)
-	l = len(Image)
-	c = int((l-1)/2)
-	f2s = 1 / (2 * np.sqrt(np.log(4)) )
-	g_sig = f2s*g_fwhm/pixres
-	conv = spi.gaussian_filter(Image, sigma = g_sig)*2*np.pi*f2s**2*(g_fwhm**2+beam_fwhm**2)
-	c_val =np.round(conv[c,c]*10**6,4)
-	n_val = np.round(Noise(conv,pixres,g_fwhm*2,c*pixres-g_fwhm)[0],4) 
-	return c_val, n_val, conv
-
-def THConv2(Image, pixres, TH_rad):	###Top-Hat Convolution using scipy.signal.covolve2d, building own kernel based off TH_rad, returns center TH value, TH convolved image
-	l = len(Image)
-	c = int((l-1)/2)
-	##Creating Kernel
-	kern = np.zeros([l,l])
-	count = 0
-	for x in range(l):
-		for y in range(l):
-			dist = np.sqrt((x-c)**2 + (y-c)**2 )
-			if dist <= TH_rad/pixres:
-				kern[x,y] = pixres**2		##Doing the value scaling here
-				#kern[x,y] = 1	##For Testing
-				count += 1
-	#print('TopHat pixels: ', count)
-	lpix = int(np.floor(c-TH_rad/pixres))
-	hpix = int(np.ceil(c+TH_rad/pixres))
-	#print(lpix, hpix)
-	Conv = convolve2d(Image, kern[lpix:hpix+1,lpix:hpix+1], mode = 'same',boundary='wrap')
-	TH = np.round(Conv[c,c]*10**6, 4)
-	TH_N = np.round(Noise(Conv,pixres,2*TH_rad,pixres*c-TH_rad)[0],4)
-	return TH, TH_N, Conv
-
-def inverse_tophat_kernel(arc,pixres,TH_rad):
-	'''returns kernel with 1 everywhere outside the tophat radius, nan within'''
-	DR=int(arc/pixres)+1
-	kern = np.full([DR,DR],np.nan)
-	c=int((DR-1)/2)
-	for x in range(DR):
-		for y in range(DR):
-			dist = np.sqrt((x-c)**2 + (y-c)**2 )
-			if dist > TH_rad/pixres:
-				kern[x,y] = 1
-	return kern
-
-def annulus_kernel(arc,pixres,rad_inner,rad_outer):
-	'''returns kernel with 1 everywhere outside the tophat radius, nan within'''
-	DR=int(arc/pixres)+1
-	kern = np.full([DR,DR],np.nan)
-	c=int((DR-1)/2)
-	for x in range(DR):
-		for y in range(DR):
-			dist = np.sqrt((x-c)**2 + (y-c)**2 )
-			if (dist > rad_inner/pixres) & (dist <= rad_outer/pixres):
-				kern[x,y] = 1
-	return kern
-
-
-
-def TH_CenterValue(Image, pixres, TH_rad):
-	l = len(Image)
-	t1=np.zeros([l,l])
-	c=int((l-1)/2)
-	for x in range(l):
-		for y in range(l):
-			dist=np.sqrt((x-c)**2+(y-c)**2)*pixres
-			if dist<=TH_rad:
-				t1[x,y]=pixres**2
-	
-	scale=1		###For if I ever want/need/should correct for the tophat only getting a portion of total signal
-
-	return np.round(scale*np.sum(t1*Image)*10**6,4)
-
-def Gaussian_CenterValue(Image, pixres, g_fwhm, beam_fwhm):
-	l = len(Image)
-	c = int((l-1)/2)
-	f2s = 1/(2*np.sqrt(np.log(4)))
-	g_sig = f2s*g_fwhm/pixres
-	conv = spi.gaussian_filter(Image, sigma = g_sig)*2*np.pi*f2s**2*(g_fwhm**2+beam_fwhm**2)
-	c_val =np.round(conv[c,c]*10**6,4)
-	return c_val
-
-###Pure TopHat sum w/o any high pass filtering (just a mean sum of surrounding area)
-def TH_Only(Image,locx,locy,pixres,TH_rad,o_rad):
-	l=len(Image)
-	TH=0
-	cpix=0
-	npix=0
-	m=0
-	for x in range(l):
-		for y in range(l):
-			dist=np.sqrt((x-locx)**2+(y-locy)**2)*pixres
-			if dist<=TH_rad:
-				TH+=Image[x,y]
-				cpix+=1
-			elif dist<=o_rad:
-				m+=Image[x,y]
-				npix+=1
-	center=(TH-m*cpix/npix)*pixres**2*10**6
-	return np.round(center,4)
-
-###TopHat sum KERNEL like the ACT paper (Schaan, et. al., 2020)
-def TopHat_DiskSub(arc,pixres,TH_rad):
-	l=int(np.rint(arc/pixres)+1)
-	tophat_kern = np.full([l,l],np.nan)
-	for x in range(l):
-		for y in range(l):
-			dist = np.sqrt((x-int((l-1)/2))**2 + (y-int((l-1)/2))**2 )
-			if dist <= TH_rad/pixres:
-				tophat_kern[x,y] = pixres**2
-			elif dist<=np.sqrt(2)*TH_rad/pixres:
-				tophat_kern[x,y] = -pixres**2
-	return tophat_kern
-
 ###Gaussian Fitting image and subtracting from center, determine noise from remainder
-def GFit(Image, pixres, fwhm, qplot, fwhm_max):	##fwhm estimate for fit (qplot True/False for if quick plot desired)
+def GFit(Image, pix_res, fwhm, qplot, fwhm_max):	##fwhm estimate for fit (qplot True/False for if quick plot desired)
 	l = len(Image)
 	c = int((l-1)/2)
-	RAD = c*pixres
+	RAD = c*pix_res
 	pmin = np.min(Image)
 	pmax = np.max(Image)
-	BASE = np.arange(-RAD, RAD + pixres, pixres) #Base array for stack mesh creation
+	BASE = np.arange(-RAD, RAD + pix_res, pix_res) #Base array for stack mesh creation
 	#	print(BASE)
 	MESH1, MESH2 = np.meshgrid(BASE, BASE)
 	xdata = np.vstack((MESH1.ravel(), MESH2.ravel()) )
@@ -420,48 +372,31 @@ def GFit(Image, pixres, fwhm, qplot, fwhm_max):	##fwhm estimate for fit (qplot T
 	
 	return popt,pcov,Gaussian(MESH1,MESH2,*popt)
 
-def iGauss(Image,pixres,high_fwhm,beam_fwhm,print_results=True):		###Returns iterative Guassian filter to be used??
-	i=0
-	t=0
-	f2s=1/(2*np.sqrt(np.log(4)))	
-	high_sig = f2s*high_fwhm/pixres
-	toFilt=Image
-	if print_results:
-		print('	Result Std | Fit (peak, sig)		| Peak Fit S/N	| Sig Fit S/N	|')
-	while i==0:
-		t+=1
-		Filt=spi.gaussian_filter(toFilt,sigma=high_sig)
-		popt,pcov,fit=GFit(toFilt-Filt,pixres,beam_fwhm,False, 1.5*beam_fwhm)
-		std=Noise(toFilt-Filt,pixres,2*beam_fwhm,(len(Image)-1)/2*pixres-2*beam_fwhm)[0]*10**-6
-		if print_results:
-			print(std,popt,np.round(abs(popt[0]/pcov[0,0]),2),np.round(popt[1]/pcov[1,1],2))
-		if abs(popt[0])<std or popt[1]/pcov[1,1]<10:
-			i=1
+def iGauss(stamp, pix_res, high_fwhm, beam_fwhm, verbose = True, return_inverse = False):		###Returns iterative Guassian filter to be used??
+	i = 0
+	t = 0
+	f2s = 1 / (2 * np.sqrt(np.log(4)))	
+	high_sig = f2s * high_fwhm / pix_res
+	to_filter = stamp
+	if verbose:
+		print("	Result Std | Fit (peak, sig)		| Peak Fit S/N	| Sig Fit S/N	|")
+	while i == 0:
+		t += 1
+		filter = spi.gaussian_filter(to_filter, sigma = high_sig)
+		popt, pcov, fit = GFit(to_filter - filter, pix_res, beam_fwhm, False, 1.5*beam_fwhm)
+		std = noise(to_filter-filter, pix_res, 2*beam_fwhm, (len(stamp)-1)/2*pix_res-2*beam_fwhm)[0]*10**-6
+		if verbose:
+			print(std, popt, np.round(abs(popt[0]/pcov[0,0]), 2), np.round(popt[1]/pcov[1,1], 2))
+		if (abs(popt[0]) < std) or (popt[1]/pcov[1,1] < 10):
+			i = 1
 		else:
-			toFilt=toFilt-fit
-	if print_results:
-		print('Number of iterations: ', t)
-	return Filt
-
-def inver_iGauss(Image,pixres,high_fwhm,beam_fwhm):		###Returns image without central beam-sized source
-	i=0
-	t=0
-	f2s=1/(2*np.sqrt(np.log(4)))	
-	high_sig = f2s*high_fwhm/pixres
-	toFilt=Image
-	print('	Result Std | Fit (peak, sig)		| Peak Fit S/N	| Sig Fit S/N	|')
-	while i==0:
-		t+=1
-		Filt=spi.gaussian_filter(toFilt,sigma=high_sig)
-		popt,pcov,fit=GFit(toFilt-Filt,pixres,beam_fwhm,False, 1.5*beam_fwhm)
-		std=Noise(toFilt-Filt,pixres,2*beam_fwhm,(len(Image)-1)/2*pixres-2*beam_fwhm)[0]*10**-6
-		print(std,popt,np.round(abs(popt[0]/pcov[0,0]),2),np.round(popt[1]/pcov[1,1],2))
-		if abs(popt[0])<std or popt[1]/pcov[1,1]<10:
-			i=1
-		else:
-			toFilt=toFilt-fit
-	print('Number of interations: ', t)
-	return toFilt
+			to_filter = to_filter - fit
+	if verbose:
+		print("Number of iterations: ", t)
+	if return_inverse:
+		return to_filter
+	else:
+		return filter
 
 def SingleStackPlot_Show(Image,NSIDE,search_arcmin,circlearc,subtitle,K_r,y):		###Shows a single plot for analysis
 	micro = 10**-6
@@ -651,7 +586,7 @@ def MultiStackGridPlot(values, search_arcmin, res, circlearc, col_titles,row_tit
 	if rebeam:
 		for i in range(vshape[0]):
 			for j in range(vshape[1]):
-				values[i,j]=change_gaussian_beam_map(values[i,j],res,oldbeams[i,j],newbeam)
+				values[i,j] = change_stamp_gaussian_beam(values[i,j],res,oldbeams[i,j],newbeam)
 
 	###Setting colorbar range
 	for i in range(vshape[0]):
@@ -746,675 +681,6 @@ def corr_plot(corr,xset,xskip=4,xdec=2,axis_label=None,title=None,shift=0.,custo
 		plt.show()
 	plt.close()
 	return None
-
-
-def iProcess_SingleAperture_AllFreq(Image_Set,pixres,TH_set,G_set,high_fwhm,beam_fwhm,sname,sloc,Calc_TF):	###Uses iGauss+high filter
-	filtered_set=[]
-	t_data=[]
-	g_data=[]
-	for i in range(len(Image_Set)):
-		t_data.append([])
-		g_data.append([])
-		Filt=iGauss(Image_Set[i],pixres,high_fwhm,beam_fwhm)
-		filtered=Image_Set[i]-Filt
-		filtered_set.append(filtered)
-		if Calc_TF:
-			for t in TH_set:
-				signal=TH_CenterValue(filtered,pixres,t)
-				t_data[i].append(signal)
-			for g in G_set:
-				signal=Gaussian_CenterValue(filtered,pixres,g,beam_fwhm)
-				g_data[i].append(signal)
-	if Calc_TF:
-		t_info='_(val)_TopHats_stats.txt'%TH_set
-		print(t_data)
-		np.savetxt(sloc+sname+t_info,np.asarray(t_data),header='TopHats of radii: '+str(TH_set))
-		g_info='_(val)_Gaussians_stats.txt'%G_set
-		print(g_data)
-		np.savetxt(sloc+sname+g_info,np.asarray(g_data),header='Gaussians of FWHM: '+str(G_set))
-
-	return filtered_set
-
-def Offset(Signal,Random,sname,sloc, saveTF):	##2-column input of signal+/-std, & 2-column Random center signal+/-std, Returns offset based off of random stack's center 2-column array
-	l=len(Signal.shape)
-	if l==1:
-		off1=u.ufloat(Signal[0],Signal[1])-u.ufloat(Random[0],Random[1])
-		result=np.array([off1.n,off1.s])
-	else:
-		result=np.zeros([len(Signal),2])
-		for i in range(len(Signal)):
-			off1=u.ufloat(Signal[i,0],Signal[i,1])-u.ufloat(Random[i,0],Random[i,1])
-			result[i,:]=off1.n,off1.s
-	# print('OffSets: ')
-	result=np.round(result,4)
-	# print(result)
-	if saveTF:
-		np.savetxt(sloc+sname+'_Offset.txt',result)
-	return result
-
-def Gaussian2d(x,y,x0,y0,x_sig,y_sig):
-		return 1/(x_sig*y_sig*2*np.pi) * np.exp(-((x-x0)**2)/2/x_sig**2 - ((y-y0)**2)/2/y_sig**2)
-
-##############SZ Fittings########################
-def YB_RJ_DustFunc(freq, Y, D, B, z):	#Rayleigh-Jeans Limit, w/o any required T_Dust (or z as they cancel each other out)
-	T_CMB = 2.725 #K
-	k = 1.38*10**(-23) #[J/K]
-	h = 6.626*10**(-34) #[J*s]
-	x_freq = freq*10**9*h/k/T_CMB
-	f_220 = 220 #GHz
-	x_220 = f_220*10**9*h/k/T_CMB
-	# near220 = spsp.factorial(abs((abs(freq-217)//4)-1))/spsp.factorial(abs(freq-217)//4)*abs(freq-217)//4
-	# print(near220) ##Check
-	# near220=1	##Troubleshooting
-	return Y*T_CMB*(x_freq*(np.exp(x_freq)+1)/(np.exp(x_freq)-1)-4)+D*(f_220/freq)**(2-B)*np.exp(x_220-x_freq)*((np.exp(x_freq)-1)/(np.exp(x_220)-1))**2
-
-def YB_DustFunc(freq, Y, D, B, z, T_dust):
-	T_CMB = 2.725 #K
-	k = 1.38*10**(-23) #[J/K]
-	h = 6.626*10**(-34) #[J*s]
-	x_freq = freq*10**9*h/k/T_CMB
-	f_220 = 220 #GHz
-	x_220 = f_220*10**9*h/k/T_CMB
-	# near220 = spsp.factorial(abs((abs(freq-217)//4)-1))/spsp.factorial(abs(freq-217)//4)*abs(freq-217)//4
-	# print(near220) ##Check
-	# near220=1	##Troubleshooting
-	#		print((freq/f_220)**(-1+B)*(np.exp(h*f_220*10**9*(1+z)/k/T_dust)-1)/(np.exp(h*freq*10**9*(1+z)/k/T_dust)-1))	##Dust Scale test
-	#		print((freq/f_220)**(-1+B)*(np.exp(h*f_220*10**9/k/T_dust)-1)/(np.exp(h*freq*10**9/k/T_dust)-1))	##Dust Scale test
-	scale = (freq*(1+z)/f_220)**(3+B)*(np.exp(h*f_220*10**9/k/T_dust)-1)/(np.exp(h*freq*10**9*(1+z)/k/T_dust)-1)*(f_220/freq)**(4)*np.exp(x_220-x_freq)*((np.exp(x_freq)-1)/(np.exp(x_220)-1))**2
-	# print(T_CMB*(x_freq*(np.exp(x_freq)+1)/(np.exp(x_freq)-1)-4))
-	# print(scale)
-	return Y*T_CMB*(x_freq*(np.exp(x_freq)+1)/(np.exp(x_freq)-1)-4)+D*scale
-
-def YB_DustFunc_band(freq_band, Y, D, B, z, T_dust, f220_band):	##freq_band is 2-d array, first column-freqs, second column-bandpass
-	freq=freq_band[:,0]
-	# print(freq_band)
-	band=freq_band[:,1]
-	# print(freq,band)
-	band_sum=spint.trapz(band, x=freq)
-	f220=f220_band[:,0]
-	b220=f220_band[:,1]
-	b220_sum=spint.trapz(b220,x=f220)
-
-	T_CMB = 2.725 #K
-	k = 1.38*10**(-23) #[J/K]
-	h = 6.626*10**(-34) #[J*s]
-	x_freq = freq*10**9*h/k/T_CMB
-	xd_freq=freq*10**9*h/k/T_dust
-	x_220 = f220*10**9*h/k/T_CMB
-	xd_220 = f220*10**9*h/k/T_dust
-
-	def dust_func(x_f):
-		# print(x_f)
-		return (x_f)**(3+B)/(np.exp(x_f)-1)
-	
-	def dBdT_func(x_f):
-		return (x_f)**4*np.exp(x_f)/(np.exp(x_f)-1)**2
-	
-	y_int=spint.trapz(band*T_CMB*(x_freq*(np.exp(x_freq)+1)/(np.exp(x_freq)-1)-4),x=freq)/band_sum
-	D220_int=spint.trapz(b220*dust_func(xd_220)/dBdT_func(x_220),x=f220)/b220_sum			###Dust @ 220GHz, z=0 redshift
-	Dx_int=spint.trapz(band*dust_func(xd_freq*(1+z))/dBdT_func(x_freq),x=freq)/band_sum
-
-	scale = Dx_int/D220_int
-	# print(y_int)
-	# print(scale)
-	return Y*y_int+D*scale
-
-def Dust_only_band(freq_band, D, B, z, T_dust, f220_band):
-	freq=freq_band[:,0]
-	# print(freq_band)
-	band=freq_band[:,1]
-	# print(freq,band)
-	band_sum=spint.trapz(band, x=freq)
-	f220=f220_band[:,0]
-	b220=f220_band[:,1]
-	b220_sum=spint.trapz(b220,x=f220)
-
-	T_CMB = 2.725 #K
-	k = 1.38*10**(-23) #[J/K]
-	h = 6.626*10**(-34) #[J*s]
-	x_freq = freq*10**9*h/k/T_CMB
-	xd_freq=freq*10**9*h/k/T_dust
-	x_220 = f220*10**9*h/k/T_CMB
-	xd_220 = f220*10**9*h/k/T_dust
-
-	def dust_func(x_f):
-		# print(x_f)
-		return (x_f)**(3+B)/(np.exp(x_f)-1)
-	
-	def dBdT_func(x_f):
-		return (x_f)**4*np.exp(x_f)/(np.exp(x_f)-1)**2
-	
-	D220_int=spint.trapz(b220*dust_func(xd_220)/dBdT_func(x_220),x=f220)/b220_sum			###Dust @ 220GHz, z=0 redshift
-	Dx_int=spint.trapz(band*dust_func(xd_freq*(1+z))/dBdT_func(x_freq),x=freq)/band_sum
-
-	scale = Dx_int/D220_int
-	# print(y_int)
-	# print(scale)
-	return D*scale
-
-def Master_SZFit_bands3(Freq_Set,Offset_Result,cov,Beta,B_Std,MeanZ,TDust,T_Std):	###Offset_Result_Set should be equal sized lx2 arrays in a list of same length of freq_set	###Make sure Freq_Set is np.dstack(set).T correctly	###Now cov
-	
-	# bnds = ([0, 0], [np.max(Offset_Result_Set), 2*np.max(Offset_Result_Set)])
-	starts = [1,2]
-	# print('Bounds(Y, D) ([min]),([max]): ', bnds)
-	# print('Starts(Y, D): ', starts)]
-	###To make sure all bands are the same size to convert to array format
-	maxlen=max([len(i) for i in Freq_Set])
-	for i in range(len(Freq_Set)):
-		while len(Freq_Set[i])<maxlen:
-			Freq_Set[i]=np.vstack((Freq_Set[i],Freq_Set[i][-1,:]))
-
-	f220_band=Freq_Set[-1]
-	Freq_Set=np.dstack(Freq_Set).T	###To Correct the way curve fit turns input into an array so function selects the right columns
-	# print(Freq_Set.shape)
-	###For number of TH or Gaussian sizes
-	# Y1=[]
-	# D1=[]
-	vals=Offset_Result
-	# print(vals)
-	# print('-----------Full (No RJ Limit)-----------')###Full Approach
-	##Center Beta
-	p2=curve_fit(lambda f, Y, D: YB_DustFunc_band(f,Y,D,Beta,MeanZ,TDust,f220_band),Freq_Set, vals,p0=starts,sigma=cov,absolute_sigma=True)[0]#,bounds=bnds)
-	# print(p2,c2)
-	Std_p=[]
-	Std_c=[]
-	for b in [Beta-B_Std,Beta+B_Std]:
-		for t in [TDust-T_Std,TDust+T_Std]:
-			p,c=curve_fit(lambda f, Y, D: YB_DustFunc_band(f,Y,D,b,MeanZ,t,f220_band),Freq_Set, vals,p0=starts,sigma=cov,absolute_sigma=True)[:2]#,bounds=bnds)
-			Std_p.append(p)
-			Std_c.append(c)
-	ymax=np.max(Std_p,axis=0)[0];ymin=np.min(Std_p,axis=0)[0]
-	ymaxi=np.where(np.asarray(Std_p)[:,0]==ymax)[0][0];ymini=np.where(np.asarray(Std_p)[:,0]==ymin)[0][0]
-	dmax=np.max(Std_p,axis=0)[1];dmin=np.min(Std_p,axis=0)[1]
-	dmaxi=np.where(np.asarray(Std_p)[:,1]==dmax)[0][0];dmini=np.where(np.asarray(Std_p)[:,1]==dmin)[0][0]
-	
-	Y1=[p2[0],p2[0]-ymin+np.sqrt(Std_c[ymini][0,0]),ymax-p2[0]+np.sqrt(Std_c[ymaxi][0,0])]	###Center, neg std, pos std
-	D1=[p2[1],p2[1]-dmin+np.sqrt(Std_c[dmini][1,1]),dmax-p2[1]+np.sqrt(Std_c[dmaxi][1,1])]
-
-	fit=YB_DustFunc_band(Freq_Set,Y1[0],D1[0],Beta,MeanZ,TDust,f220_band)
-	# print(fit)
-
-	if len(cov.shape)>1:
-		chi_sq=(np.asarray(Offset_Result)-fit)@np.linalg.inv(cov)@(np.asarray(Offset_Result)-fit).reshape(len(Offset_Result),1)
-	else:
-		chi_sq=((np.asarray(Offset_Result)-fit)/cov)**2
-	
-	Y1=np.round(Y1,6);D1=np.round(D1,6);chi_sq=np.round(chi_sq,3)
-	return Y1,D1,chi_sq
-
-def Master_SZFit_bands4(Freq_Set,Offset_Result,cov,Beta,B_Std,MeanZ,TDust,T_Std):	###Offset_Result_Set should be equal sized lx2 arrays in a list of same length of freq_set	###Make sure Freq_Set is np.dstack(set).T correctly	###Now cov, single list output (instead of 3 arrays)
-	
-	# bnds = ([0, 0], [np.max(Offset_Result_Set), 2*np.max(Offset_Result_Set)])
-	starts = [1,2]
-	# print('Bounds(Y, D) ([min]),([max]): ', bnds)
-	# print('Starts(Y, D): ', starts)]
-	###To make sure all bands are the same size to convert to array format
-	maxlen=max([len(i) for i in Freq_Set])
-	for i in range(len(Freq_Set)):
-		while len(Freq_Set[i])<maxlen:
-			Freq_Set[i]=np.vstack((Freq_Set[i],Freq_Set[i][-1,:]))
-
-	f220_band=Freq_Set[-1]
-	Freq_Set=np.dstack(Freq_Set).T	###To Correct the way curve fit turns input into an array so function selects the right columns
-	# print(Freq_Set.shape)
-	###For number of TH or Gaussian sizes
-	# Y1=[]
-	# D1=[]
-	vals=Offset_Result
-	# print(vals)
-	# print('-----------Full (No RJ Limit)-----------')###Full Approach
-	##Center Beta
-	p2=curve_fit(lambda f, Y, D: YB_DustFunc_band(f,Y,D,Beta,MeanZ,TDust,f220_band),Freq_Set, vals,p0=starts,sigma=cov,absolute_sigma=True)[0]#,bounds=bnds)
-	# print(p2,c2)
-	Std_p=[]
-	Std_c=[]
-	for b in [Beta-B_Std,Beta+B_Std]:
-		for t in [TDust-T_Std,TDust+T_Std]:
-			p,c=curve_fit(lambda f, Y, D: YB_DustFunc_band(f,Y,D,b,MeanZ,t,f220_band),Freq_Set, vals,p0=starts,sigma=cov,absolute_sigma=True)[:2]#,bounds=bnds)
-			Std_p.append(p)
-			Std_c.append(c)
-	ymax=np.max(Std_p,axis=0)[0];ymin=np.min(Std_p,axis=0)[0]
-	ymaxi=np.where(np.asarray(Std_p)[:,0]==ymax)[0][0];ymini=np.where(np.asarray(Std_p)[:,0]==ymin)[0][0]
-	dmax=np.max(Std_p,axis=0)[1];dmin=np.min(Std_p,axis=0)[1]
-	dmaxi=np.where(np.asarray(Std_p)[:,1]==dmax)[0][0];dmini=np.where(np.asarray(Std_p)[:,1]==dmin)[0][0]
-	
-	Y1=[p2[0],p2[0]-ymin+np.sqrt(Std_c[ymini][0,0]),ymax-p2[0]+np.sqrt(Std_c[ymaxi][0,0])]	###Center, neg std, pos std
-	D1=[p2[1],p2[1]-dmin+np.sqrt(Std_c[dmini][1,1]),dmax-p2[1]+np.sqrt(Std_c[dmaxi][1,1])]
-
-	fit=YB_DustFunc_band(Freq_Set,Y1[0],D1[0],Beta,MeanZ,TDust,f220_band)
-	# print(fit)
-	chi_sq=(np.asarray(Offset_Result)-fit)@np.linalg.inv(cov)@(np.asarray(Offset_Result)-fit).reshape(len(Offset_Result),1)
-	
-	Y1=np.round(Y1,6);D1=np.round(D1,6);chi_sq=np.round(chi_sq,3)
-	return list(Y1)+list(D1)+list(chi_sq)
-
-def Master_SZFit_bands_TH_Each(Freq_Set,Offset_Result,cov,Beta,B_Std,MeanZ,TDust,T_Std):	###Offset_Result_Set should be equal sized lx2 arrays in a list of same length of freq_set	###Make sure Freq_Set is np.dstack(set).T correctly	###Now cov
-	bnds = ([0, 0], [np.inf, np.inf])
-	starts = [1,2]
-	###To make sure all bands are the same size to convert to array format
-	maxlen=max([len(i) for i in Freq_Set])
-	for i in range(len(Freq_Set)):
-		while len(Freq_Set[i])<maxlen:
-			Freq_Set[i]=np.vstack((Freq_Set[i],Freq_Set[i][-1,:]))
-
-	f220_band=Freq_Set[-1]
-	Freq_Set=np.dstack(Freq_Set).T	###To Correct the way curve fit turns input into an array so function selects the right columns
-	# print(Freq_Set.shape)
-	###For number of TH or Gaussian sizes
-	# Y1=[]
-	# D1=[]
-	vals=Offset_Result
-	# print(vals)
-	##Center Beta
-	p2=curve_fit(lambda f, Y, D: YB_DustFunc_band(f,Y,D,Beta,MeanZ,TDust,f220_band),Freq_Set,vals,p0=starts,sigma=cov,absolute_sigma=True,bounds=bnds)[0]
-	# print(p2,c2)
-	Std_p=[]
-	Std_c=[]
-	for b in [Beta-B_Std,Beta+B_Std]:
-		for t in [TDust-T_Std,TDust+T_Std]:
-			p,c=curve_fit(lambda f, Y, D: YB_DustFunc_band(f,Y,D,b,MeanZ,t,f220_band),Freq_Set, vals,p0=starts,sigma=cov,absolute_sigma=True,bounds=bnds)[:2]
-			Std_p.append(p)
-			Std_c.append(c)
-	ymax=np.max(Std_p,axis=0)[0];ymin=np.min(Std_p,axis=0)[0]
-	ymaxi=np.where(np.asarray(Std_p)[:,0]==ymax)[0][0];ymini=np.where(np.asarray(Std_p)[:,0]==ymin)[0][0]
-	dmax=np.max(Std_p,axis=0)[1];dmin=np.min(Std_p,axis=0)[1]
-	dmaxi=np.where(np.asarray(Std_p)[:,1]==dmax)[0][0];dmini=np.where(np.asarray(Std_p)[:,1]==dmin)[0][0]
-	
-	Y1=[p2[0],ymin,np.sqrt(Std_c[ymini][0,0]),ymax,np.sqrt(Std_c[ymaxi][0,0])]	###Center, min, min std, max, and max std
-	D1=[p2[1],dmin,np.sqrt(Std_c[dmini][1,1]),dmax,np.sqrt(Std_c[dmaxi][1,1])]
-
-	# fit=YB_DustFunc_band(Freq_Set,Y1[0],D1[0],Beta,MeanZ,TDust,f220_band)
-	# print(fit)
-
-	Y1=np.round(Y1,6);D1=np.round(D1,6)
-	return Y1,D1
-
-def Master_SZFit_bands_ConstDust(Freq_Set,Offset_Result,cov,Beta,MeanZ,TDust):	###Offset_Result_Set should be equal sized lx2 arrays in a list of same length of freq_set	###Make sure Freq_Set is np.dstack(set).T correctly	###Now cov
-	
-	bnds = ([-np.inf, 0], [np.inf, np.inf])
-	starts = [1,2]
-	# print('Bounds(Y, D) ([min]),([max]): ', bnds)
-	# print('Starts(Y, D): ', starts)]
-	###To make sure all bands are the same size to convert to array format
-	maxlen=max([len(i) for i in Freq_Set])
-	for i in range(len(Freq_Set)):
-		while len(Freq_Set[i])<maxlen:
-			Freq_Set[i]=np.vstack((Freq_Set[i],Freq_Set[i][-1,:]))
-
-	f220_band=Freq_Set[-1]
-	Freq_Set=np.dstack(Freq_Set).T	###To Correct the way curve fit turns input into an array so function selects the right columns
-	# print(Freq_Set.shape)
-	vals=Offset_Result
-	# print(vals)
-	# print('-----------Full (No RJ Limit)-----------')###Full Approach
-	p2,c2=curve_fit(lambda f, Y, D: YB_DustFunc_band(f,Y,D,Beta,MeanZ,TDust,f220_band),Freq_Set, vals,p0=starts,sigma=cov,absolute_sigma=True)#,bounds=bnds)[:2]
-	# print(p2,c2)
-	
-	Y1=[p2[0],np.sqrt(c2[0,0])]	###Center, std (sqrt of cov)
-	D1=[p2[1],np.sqrt(c2[1,1])]
-
-	fit=YB_DustFunc_band(Freq_Set,Y1[0],D1[0],Beta,MeanZ,TDust,f220_band)
-	# print(fit)
-
-	if len(cov.shape)>1:
-		chi_sq=(np.asarray(Offset_Result)-fit)@np.linalg.inv(cov)@(np.asarray(Offset_Result)-fit).reshape(len(Offset_Result),1)
-	else:
-		chi_sq=np.sum(((np.asarray(Offset_Result)-fit)/cov)**2)
-	
-	Y1=np.round(Y1,6);D1=np.round(D1,6);chi_sq=np.round(chi_sq,3)
-	return Y1,D1,chi_sq
-
-def Gaussian_Priors_Noise(Freq_Set,Offset_Result,cov,Beta,B_Std,MeanZ,TDust,TDust_Std):	###For Applying Gaussian Priors to noise of both dust parameters (Beta and TDust)
-	dB=0.01
-	dT=0.2
-	B_range=np.arange(Beta-3*B_Std,Beta+3*B_Std+dB,dB)
-	blen=len(B_range)
-	T_range=np.arange(TDust-3*TDust_Std,TDust+3*TDust_Std+dT,dT)
-	tlen=len(T_range)
-	print('%i steps of Beta from: %.3f-%.3f'%(blen,np.min(B_range),np.max(B_range)))
-	print('%i steps of TDust from: %.3f-%.3f'%(tlen,np.min(T_range),np.max(T_range)))
-	y=np.zeros([blen,tlen])
-	y_errs=np.zeros([blen,tlen])
-	d=np.zeros([blen,tlen])
-	d_errs=np.zeros([blen,tlen])
-	chi_sq=np.zeros([blen,tlen])
-	
-	for b in range(blen):
-		for t in range(tlen):
-			lst=Master_SZFit_bands_ConstDust(Freq_Set,Offset_Result,cov,B_range[b],MeanZ,T_range[t])
-			# print(lst)		###Check
-			y[b,t]=lst[0][0]
-			y_errs[b,t]=lst[0][1]
-			d[b,t]=lst[1][0]
-			d_errs[b,t]=lst[1][1]
-			chi_sq[b,t]=lst[2]
-	
-	t_mesh,b_mesh=np.meshgrid(T_range,B_range)	
-	g=Gaussian2d(b_mesh,t_mesh,Beta,TDust,B_Std,TDust_Std)
-	# print(np.sum(g))
-	return t_mesh,b_mesh,y,y_errs,d,d_errs,chi_sq,g
-
-def Gaussian_Priors_End(Freq_Set,Offset_Result,cov,Beta,B_Std,MeanZ,TDust,TDust_Std,PlotCheck):
-	yd_set=Gaussian_Priors_Noise(Freq_Set,Offset_Result,cov,Beta,B_Std,MeanZ,TDust,TDust_Std)
-	g_normed=yd_set[-1]/np.sum(yd_set[-1])
-	y_mean=np.sum(g_normed*yd_set[2])
-	d_mean=np.sum(g_normed*yd_set[4])
-	y_var=np.sum(g_normed*(yd_set[3]**2))
-	d_var=np.sum(g_normed*(yd_set[5]**2))
-	# print(y_mean,np.sqrt(y_var))
-	# print(d_mean,np.sqrt(d_var))
-
-	y_set=np.vstack((yd_set[2].flatten(),yd_set[3].flatten(),g_normed.flatten()))
-	d_set=np.vstack((yd_set[4].flatten(),yd_set[5].flatten(),g_normed.flatten()))
-
-	###sorting by y values to get median/50th percentile value
-	print('Compton-y Stuff --------')
-	y_set=y_set[:,y_set[0,:].argsort()]
-	i=0
-	j=0
-	while i==0:
-		if np.sum(y_set[2,:j])<=0.5 and np.sum(y_set[2,j+1:])<=0.5:
-			# print(j,y_set[0,j],np.sum(y_set[2,:j]),np.sum(y_set[2,j+1:]),y_set[1,j])
-			i+=1
-		else:
-			j+=1
-	ymed=y_set[0,j]
-	print('y median: ',ymed)
-	##For finding lower and upper bounds for 68.27% (1 sigma)
-	step=0.01
-	y_bins,bins=np.histogram(y_set[0,:],bins=np.arange(np.floor(np.min(y_set[0,:]))-5*step/2,np.max(y_set[0,:])+5*step,step),weights=y_set[2,:])
-	bins+=step/2
-	print('bin check: ',bins[:5],len(bins))
-	for i in range(len(y_bins)):
-		if y_bins[i]!=0 and y_bins[i+1]!=0 and y_bins[i+2]!=0:
-			j=i
-			break
-	# print(j,bins[j],y_bins[j])		###For first set of nonzero bins
-	yb_st=bins[j]
-	i=0
-	while i==0:
-		k=0
-		l=0
-		while k==0:
-			if np.sum(y_bins[j:j+l])<=0.6827 and np.sum(y_bins[:j])+np.sum(y_bins[j+l+1:])<=(1-0.6827):		###If within bounds sum to 
-				# print(j,l,y_bins[j:j+2],y_bins[j+l:j+l+2],bins[j],bins[j+l],np.sum(y_bins[j:j+l]),np.sum(y_bins[:j])+np.sum(y_bins[j+l+1:]))
-				if np.mean(y_bins[j:j+1])>np.mean(y_bins[j+l:j+l+3])<y_bins[j]:			###If 2 after lower bound are higher than upper and vica versa (had to change bc 11.15 bin y was so narrow)
-					i+=1
-				else:
-					j+=1
-				k+=1
-			else:
-				l+=1
-	# print(j,l,y_bins[j-1:j+2],y_bins[j+l-1:j+l+2],bins[j],bins[j+l],np.sum(y_bins[j:j+l]),np.sum(y_bins[:j])+np.sum(y_bins[j+l+1:]))
-	ymin=bins[j];ymax=bins[j+l]
-
-
-	###ditto for dust values
-	print('Dust Stuff --------')
-	d_set=d_set[:,d_set[0,:].argsort()]
-	i=0
-	j=0
-	while i==0:
-		if np.sum(d_set[2,:j])<=0.5 and np.sum(d_set[2,j+1:])<=0.5:
-			# print(j,d_set[0,j],np.sum(d_set[2,:j]),np.sum(d_set[2,j+1:]),d_set[1,j])
-			i+=1
-		else:
-			j+=1
-	dmed=d_set[0,j]
-	print('dust median: ',dmed)
-	##For finding lower and upper bounds for 68.27% (1 sigma)
-	step=0.01
-	d_bins,bins=np.histogram(d_set[0,:],bins=np.arange(np.floor(np.min(d_set[0,:]))-5*step/2,np.max(d_set[0,:])+5*step,step),weights=d_set[2,:])
-	bins+=step/2
-	# print('bin check: ',bins[:5],len(bins))
-	for i in range(len(d_bins)):
-		if d_bins[i]!=0 and d_bins[i+1]!=0 and d_bins[i+2]!=0:
-			j=i
-			break
-	# print(j,bins[j],d_bins[j])		###For first set of nonzero bins
-	db_st=bins[j]
-	i=0
-	while i==0:
-		k=0
-		l=0
-		while k==0:
-			if np.sum(d_bins[j:j+l])<=0.6827 and np.sum(d_bins[:j])+np.sum(d_bins[j+l+1:])<=(1-0.6827):		###If within bounds sum to 
-				# print(j,l,d_bins[j:j+2],d_bins[j+l:j+l+2],bins[j],bins[j+l],np.sum(d_bins[j:j+l]),np.sum(d_bins[:j])+np.sum(d_bins[j+l+1:]))
-				if np.mean(d_bins[j:j+5])>d_bins[j+l] and np.mean(d_bins[j+l:j+l+5])<d_bins[j]:			###If 4 after lower bound are higher than upper and vica versa
-					i+=1
-				else:
-					j+=1
-				k+=1
-			else:
-				l+=1
-	# print(j,l,d_bins[j-1:j+2],d_bins[j+l-1:j+l+2],bins[j],bins[j+l],np.sum(d_bins[j:j+l]),np.sum(d_bins[:j])+np.sum(d_bins[j+l+1:]))
-	dmin=bins[j];dmax=bins[j+l]
-
-	###Plot Checking the distribution and median, errors
-	if PlotCheck:
-		step=0.01
-		plt.hist((yd_set[2]).flatten(),np.arange(yb_st,yb_st+4,step),weights=g_normed.flatten(),density=False)
-		bot,top=plt.ylim()
-		plt.vlines([ymin,ymed,ymax],[0,0,0],[1,1,1],linestyles=['dashed','solid','dashed'],colors=['r']*3)
-		plt.ylim(bot,top)
-		plt.xlabel(r'compton-y [$10^{-6}$ arcmin$^2$]')
-		plt.show()
-		plt.close()
-		plt.hist((yd_set[4]).flatten(),np.arange(db_st,db_st+3,step),weights=g_normed.flatten(),density=False)
-		bot,top=plt.ylim()
-		plt.vlines([dmin,dmed,dmax],[0,0,0],[1,1,1],linestyles=['dashed','solid','dashed'],colors=['r']*3)
-		plt.ylim(bot,top)
-		plt.xlabel(r'Dust [$\mu$K arcmin$^2$]')
-		plt.show()
-		plt.close()
-	return np.array([ymed,np.sqrt(y_var+(ymed-ymin)**2),np.sqrt(y_var+(ymax-ymed)**2)]),np.array([dmed,np.sqrt(d_var+(dmed-dmin)**2),np.sqrt(d_var+(dmax-dmed)**2)])
-			
-def Random_Gaussian_Priors(Freq_Set,Offset_Result,cov,Beta,B_Std,MeanZ,TDust,TDust_Std,N_rand):
-	B_range=np.abs(np.random.normal(Beta,B_Std,N_rand))
-	print(len(B_range))
-	T_range=np.abs(np.random.normal(TDust,TDust_Std,N_rand))
-	print(len(T_range))
-	y=np.zeros(N_rand)
-	y_errs=np.zeros(N_rand)
-	d=np.zeros(N_rand)
-	d_errs=np.zeros(N_rand)
-	chi_sq=np.zeros(N_rand)
-	
-	for n in range(N_rand):
-		lst=Master_SZFit_bands_ConstDust(Freq_Set,Offset_Result,cov,B_range[n],MeanZ,T_range[n])
-		y[n]=lst[0][0]
-		y_errs[n]=lst[0][1]
-		d[n]=lst[1][0]
-		d_errs[n]=lst[1][1]
-		chi_sq[n]=lst[2]
-
-	return T_range,B_range,y,y_errs,d,d_errs,chi_sq
-
-def ComparePlotFits(Freq_Set,Offset_Set,Beta,MeanZ,TDust,Y_Set,D_Set,title,sname,sloc,yrange,RJ_TF,ErrorTF,Intensity_TF):	##Y and D set first RJ fit, second Exact fit (both with pm values after)
-	frange=np.arange(1,301,1)
-	def ToIntensity(freq):		###Intensity in kiloJanskys [kJy] (factoring in arcmin^2 conversion)
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		c = 2.998*10**8		#[m/s]
-		x = freq*10**9*h/k/T_CMB
-		rad2arc=180*60/np.pi		###For steradian conversion
-		return 10**(23)*rad2arc**(-2)*2*(k*T_CMB)**3/(h*c)**2/T_CMB*x**4*np.exp(x)/(np.exp(x)-1)**2
-
-	def Y_Only(freq,Y):
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		x_freq = freq*10**9*h/k/T_CMB
-		return Y*T_CMB*(x_freq*(np.exp(x_freq)+1)/(np.exp(x_freq)-1)-4)
-	def D_RJ_Only(freq,D,B):
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		x_freq = freq*10**9*h/k/T_CMB
-		f_220 = 220 #GHz
-		x_220 = f_220*10**9*h/k/T_CMB
-		return D*(f_220/freq)**(2-B)*np.exp(x_220-x_freq)*((np.exp(x_freq)-1)/(np.exp(x_220)-1))**2
-	def D_Exact_Only(freq,D,B,z,T_dust):
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		x_freq = freq*10**9*h/k/T_CMB
-		f_220 = 220 #GHz
-		x_220 = f_220*10**9*h/k/T_CMB
-		return D*(freq*(1+z)/f_220)**(3+B)*(np.exp(h*f_220*10**9/k/T_dust)-1)/(np.exp(h*freq*10**9*(1+z)/k/T_dust)-1)*(f_220/freq)**(4)*np.exp(x_220-x_freq)*((np.exp(x_freq)-1)/(np.exp(x_220)-1))**2
-
-	# plt.title(title)
-	plt.xlabel('Frequency [GHz]')
-	plt.xlim([0,np.max(frange)])
-	# plt.margins(x=0)
-	plt.axhline(linewidth=1,color='k')
-	if Intensity_TF:
-		factor=ToIntensity(frange)
-		plt.ylabel('Intensity [kJy]')
-		add='_Intensity'
-	else:
-		plt.ylabel(r'Aperture Sum [$\mu$$K_{CMB}$ $arcmin^2$]')
-		factor=1
-		add='_Temperature'
-	plt.ylim(yrange)
-	# print(Freq_Set,Offset_Set, Offset_Set[0,::2],Offset_Set[0,1::2])
-	plt.errorbar(Freq_Set,Offset_Set[0,::2]*ToIntensity(np.asarray(Freq_Set)),yerr=Offset_Set[0,1::2]*ToIntensity(np.asarray(Freq_Set)),fmt='.',color='k',label='Map Aperture Sums',capsize=5)
-
-	if RJ_TF:
-		add+='_R-J-Limit_Fit'
-		plt.plot(frange,factor*YB_RJ_DustFunc(frange,Y_Set[0],D_Set[0],Beta,MeanZ),'k--',label='R-J Combined Fit')
-		plt.plot(frange,factor*Y_Only(frange,Y_Set[0]),'b',label='tSZ Fit')
-		plt.plot(frange,factor*D_RJ_Only(frange,D_Set[0],Beta),'r',label='R-J Dust Fit')
-		if ErrorTF:
-			add+='_wErrorFill'
-			plt.fill_between(frange,factor*Y_Only(frange,Y_Set[0]-Y_Set[1]),factor*Y_Only(frange,Y_Set[0]+Y_Set[2]),color='blue',alpha=0.3)
-			plt.fill_between(frange,factor*D_RJ_Only(frange,D_Set[0]-D_Set[1],Beta),factor*D_RJ_Only(frange,D_Set[0]+D_Set[2],Beta),color='red',alpha=0.3)
-	else:
-		add+='_Exact_Fit'
-		plt.plot(frange,factor*YB_DustFunc(frange,Y_Set[0],D_Set[0],Beta,MeanZ,TDust),'k--',label='Combined Fit')
-		plt.plot(frange,factor*Y_Only(frange,Y_Set[0]),'b',label='tSZ Fit')
-		plt.plot(frange,factor*D_Exact_Only(frange,D_Set[0],Beta,MeanZ,TDust),'r',label='Dust Fit')
-		if ErrorTF:
-				add+='_wErrorFill'
-				plt.fill_between(frange,factor*Y_Only(frange,Y_Set[0]-Y_Set[1]),factor*Y_Only(frange,Y_Set[0]+Y_Set[2]),color='blue',alpha=0.3)
-				plt.fill_between(frange,factor*D_Exact_Only(frange,D_Set[0]-D_Set[1],Beta,MeanZ,TDust),factor*D_Exact_Only(frange,D_Set[0]+D_Set[2],Beta,MeanZ,TDust),color='red',alpha=0.3)
-				
-	plt.legend(loc=2)
-	plt.savefig(sloc+sname+add+'.pdf',bbox_inches='tight',dpi=400)
-	plt.close()
-
-def ComparePlotFits_Dust(Freq_Set,Offset_Set,Beta,MeanZ,TDust,D_Only_Set,D_CMB_Set,title,sname,sloc,yrange,ErrorTF,Intensity_TF):	##D, D and CMB fits (both with pm values after, so 3 long and 2x3 long, respectively)
-	frange=np.arange(1,301,1)
-	def ToIntensity(freq):		###Intensity in kiloJanskys [kJy] (factoring in arcmin^2 conversion)
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		c = 2.998*10**8		#[m/s]
-		x = freq*10**9*h/k/T_CMB
-		rad2arc=180*60/np.pi		###For steradian conversion
-		return 10**(23)*rad2arc**(-2)*2*(k*T_CMB)**3/(h*c)**2/T_CMB*x**4*np.exp(x)/(np.exp(x)-1)**2
-
-	def D_Exact_Only(freq,D,B,z,T_dust):
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		x_freq = freq*10**9*h/k/T_CMB
-		f_220 = 220 #GHz
-		x_220 = f_220*10**9*h/k/T_CMB
-		return D*(freq*(1+z)/f_220)**(3+B)*(np.exp(h*f_220*10**9/k/T_dust)-1)/(np.exp(h*freq*10**9*(1+z)/k/T_dust)-1)*(f_220/freq)**(4)*np.exp(x_220-x_freq)*((np.exp(x_freq)-1)/(np.exp(x_220)-1))**2
-
-	plt.title(title)
-	plt.xlabel('Frequency [GHz]')
-	plt.xlim([0,np.max(frange)])
-	# plt.margins(x=0)
-	plt.axhline(linewidth=1,color='k')
-	if Intensity_TF:
-		factor=ToIntensity(frange)
-		plt.ylabel('Intensity [kJy]')
-		add='_Intensity'
-	else:
-		plt.ylabel(r'Aperture Sum [$\mu$$K_{CMB}$ $arcmin^2$]')
-		factor=1
-		add='_Temperature'
-	plt.ylim(yrange)
-	# print(Freq_Set,Offset_Set, Offset_Set[0,::2],Offset_Set[0,1::2])
-	plt.errorbar(Freq_Set,Offset_Set[0,::2]*ToIntensity(np.asarray(Freq_Set)),yerr=Offset_Set[0,1::2]*ToIntensity(np.asarray(Freq_Set)),fmt='.',color='k',label='Map Sums',capsize=5)
-
-	add+='_Dust_Fits'
-	plt.plot(frange,factor*D_Exact_Only(frange,D_Only_Set[0],Beta,MeanZ,TDust),'k-',label='Dust Only Fit')
-	plt.plot(frange,factor*(D_CMB_Set[1][0]+D_Exact_Only(frange,D_CMB_Set[0][0],Beta,MeanZ,TDust)),'k--',label='Dust+CMB_Shift Fit')
-	plt.plot(frange,factor*D_CMB_Set[1][0],'-',color='orange',label='Dust+CMB CMB Component')
-	plt.plot(frange,factor*D_Exact_Only(frange,D_CMB_Set[0][0],Beta,MeanZ,TDust),'r-',label='Dust+CMB Dust Component')
-	if ErrorTF:
-			add+='_wErrorFill'
-			plt.fill_between(frange,factor*(D_CMB_Set[1][0]-D_CMB_Set[1][1]),factor*(D_CMB_Set[1][0]+D_CMB_Set[1][2]),color='orange',alpha=0.3)
-			plt.fill_between(frange,factor*D_Exact_Only(frange,D_CMB_Set[0][0]-D_CMB_Set[0][1],Beta,MeanZ,TDust),factor*D_Exact_Only(frange,D_CMB_Set[0][0]+D_CMB_Set[0][2],Beta,MeanZ,TDust),color='red',alpha=0.3)
-			plt.fill_between(frange,factor*D_Exact_Only(frange,D_Only_Set[0]-D_Only_Set[1],Beta,MeanZ,TDust),factor*D_Exact_Only(frange,D_Only_Set[0]+D_Only_Set[2],Beta,MeanZ,TDust),color='gray',alpha=0.3)
-				
-	plt.legend(loc=2)
-	plt.savefig(sloc+sname+add,bbox_inches='tight')
-	plt.close()
-
-def ComparePlotFits_DustCompare(Freq_Set,Offset_Set,Beta,MeanZ,TDust,Y_Set,D_Set,D_Only_Set,title,sname,sloc,yrange,ErrorTF,Intensity_TF):	##D, D and CMB fits (both with pm values after, so 3 long and 2x3 long, respectively)
-	frange=np.arange(1,301,1)
-	def ToIntensity(freq):		###Intensity in kiloJanskys [kJy] (factoring in arcmin^2 conversion)
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		c = 2.998*10**8		#[m/s]
-		x = freq*10**9*h/k/T_CMB
-		rad2arc=180*60/np.pi		###For steradian conversion
-		return 10**(23)*rad2arc**(-2)*2*(k*T_CMB)**3/(h*c)**2/T_CMB*x**4*np.exp(x)/(np.exp(x)-1)**2
-
-	def Y_Only(freq,Y):
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		x_freq = freq*10**9*h/k/T_CMB
-		return Y*T_CMB*(x_freq*(np.exp(x_freq)+1)/(np.exp(x_freq)-1)-4)
-
-	def D_Exact_Only(freq,D,B,z,T_dust):
-		T_CMB = 2.725 #K
-		k = 1.38*10**(-23) #[J/K]
-		h = 6.626*10**(-34) #[J*s]
-		x_freq = freq*10**9*h/k/T_CMB
-		f_220 = 220 #GHz
-		x_220 = f_220*10**9*h/k/T_CMB
-		return D*(freq*(1+z)/f_220)**(3+B)*(np.exp(h*f_220*10**9/k/T_dust)-1)/(np.exp(h*freq*10**9*(1+z)/k/T_dust)-1)*(f_220/freq)**(4)*np.exp(x_220-x_freq)*((np.exp(x_freq)-1)/(np.exp(x_220)-1))**2
-
-	plt.title(title)
-	plt.xlabel('Frequency [GHz]')
-	plt.xlim([0,np.max(frange)])
-	# plt.margins(x=0)
-	plt.axhline(linewidth=1,color='k')
-	if Intensity_TF:
-		factor=ToIntensity(frange)
-		plt.ylabel('Intensity [kJy]')
-		add='_Intensity'
-	else:
-		plt.ylabel(r'Aperture Sum [$\mu$$K_{CMB}$ $arcmin^2$]')
-		factor=1
-		add='_Temperature'
-	plt.ylim(yrange)
-	# print(Freq_Set,Offset_Set, Offset_Set[0,::2],Offset_Set[0,1::2])
-	plt.errorbar(Freq_Set,Offset_Set[0,::2]*ToIntensity(np.asarray(Freq_Set)),yerr=Offset_Set[0,1::2]*ToIntensity(np.asarray(Freq_Set)),fmt='.',color='k',label='Map Sums',capsize=5)
-
-	add+='_DustCompare_Fits'
-	plt.plot(frange,factor*YB_DustFunc(frange,Y_Set[0],D_Set[0],Beta,MeanZ,TDust),'k--',label='Combined Fit')
-	plt.plot(frange,factor*Y_Only(frange,Y_Set[0]),'b-',label='tSZ Fit')
-	plt.plot(frange,factor*D_Exact_Only(frange,D_Set[0],Beta,MeanZ,TDust),'r-',label='Dust Fit')
-	plt.plot(frange,factor*D_Exact_Only(frange,D_Only_Set[0],Beta,MeanZ,TDust),'k',linewidth=2,label='Dust Only Fit')
-
-	if ErrorTF:
-			add+='_wErrorFill'
-			plt.fill_between(frange,factor*D_Exact_Only(frange,D_Only_Set[0]-D_Only_Set[1],Beta,MeanZ,TDust),factor*D_Exact_Only(frange,D_Only_Set[0]+D_Only_Set[2],Beta,MeanZ,TDust),color='gray',alpha=0.3)
-			plt.fill_between(frange,factor*Y_Only(frange,Y_Set[0]-Y_Set[1]),factor*Y_Only(frange,Y_Set[0]+Y_Set[2]),color='blue',alpha=0.3)
-			plt.fill_between(frange,factor*D_Exact_Only(frange,D_Set[0]-D_Set[1],Beta,MeanZ,TDust),factor*D_Exact_Only(frange,D_Set[0]+D_Set[2],Beta,MeanZ,TDust),color='red',alpha=0.3)
-				
-	plt.legend(loc=2)
-	plt.savefig(sloc+sname+add,bbox_inches='tight')
-	plt.close()
 
 ##################General Fitting##################
 ####My new generalized fitting procedure....
@@ -2832,47 +2098,6 @@ mass_distr_sigmas: float or list or np.ndarray, mass_distr_means: float or list 
 	result=10**np.array([spint.quad_vec(lambda x: E(x,m_range[m]),integral_min,integral_max)[0]/spint.quad_vec(lambda x: E_weight(x,m_range[m]),integral_min,integral_max)[0] for m in range(len(m_range))])
 	return result
 
-
-def anderson_plot(data,xpos,xlabel=None,xlims=None,datalabel=None,savename=None,sig_level_inds=[-1],dist="norm"):
-	'''multiple sets of data must have the same size to plot together (since different size == different critical values.  If xlims are not given, will assume +/- 5% of max/min of xpos'''
-	data=np.array(data)
-	d_s=[]
-	if len(data.shape)>1:
-
-		for d in data:
-			s,crit_values,s_levels=stats.anderson(d,dist=dist)
-			d_s.append(s)
-
-	else:
-		s,crit_values,s_levels=stats.anderson(data,dist=dist)
-		d_s.append(s)
-	
-
-	plt.scatter(xpos,d_s,label=datalabel)
-	plt.legend()
-	if xlims is not None:
-		xmin=xlims[0]
-		xmax=xlims[1]
-	else:
-		xmin=np.min(xpos)*0.95
-		xmax=np.max(xpos)*1.05
-
-	###Hlines
-	plt.hlines(crit_values[sig_level_inds],xmin,xmax,linestyles="dashed")
-	###Labels for hlines
-	for i in sig_level_inds:
-		plt.text(xmax*0.9,crit_values[i],"%i%% Sign. Level"%(s_levels[i]),backgroundcolor="white")
-	plt.xlabel(xlabel)
-	plt.xlim(xmin,xmax)
-	plt.ylabel("Anderson-Darling Statistic")
-	
-	if savename is not None:
-		plt.savefig(savename,bbox_inches="tight_layout",dpi=400)
-	else:
-		plt.show()
-	plt.close()
-
-
 # print(energy_mass_correction(np.arange(10.6,12.01,0.1)-0.05,1,4,sed_sigma=0.16,mass_distr_sigmas=0.2,mass_distr_means=11.2))
 # exit()
 ###Low pass size noise tests
@@ -2886,7 +2111,7 @@ if __name__=="__main__":
 	print(low_TH)
 	print(low_G)
 	high=5
-	pixres=0.05
+	pix_res=0.05
 	NSIDE=8192
 	arc=60
 	c=2.5
@@ -2990,98 +2215,3 @@ if __name__=="__main__":
 	# print(BE_fit)
 	# print(BE_cov)
 	# print(BE_errs)
-
-	# m1=(np.genfromtxt('../../temp/SPT_OG(4)_high-ztest4_SPT_220GHz_60.00Arcmin_0.05pixRes.txt')/47732).T
-	# m2=np.genfromtxt('../Stacks/DataSaves/Subsets/SPT_OG/SPT/60arc/SPT_OG(4)_highz_1p1_47732count_220GHz_60.00Arcmin_0.05pixRes.txt')
-	# MultiStackPlot([m1,m2],NSIDE,arc,carc,['Faster','Slowpoke'],'Testcheck','./',[0,0],False)
-	# Master_SZFit([95,150,220],[np.array([1,2,3,4,5,6]),np.array([1,2,3,4,5,6]),np.array([1,2,3,4,5,6])],1,.1,1,20)
-
-	# for f in Freq:
-	# 	rand=np.genfromtxt('../Stacks/DataSaves/SPTRandom/60arc/SPT_Random_All_%iGHz'%f+params)
-	# 	filt=GFilter(rand,pixres,high,0)
-	# 	ig=iGauss(rand,pixres,high,b)
-	# 	MultiStackPlot([filt,rand-ig],NSIDE,arc,carc,['5arc HP Filtered Random','5arc HP iGaussian Filtered Random'],'Random_%iGHz_test'%f,iloc,[-0.3,0.3],False)
-	# 	th,thn,thi=THConv2(filt,pixres,2)
-	# 	print(th,thn)
-	# 	print(np.mean(thi))
-	# 	th,thn,thi=THConv2(rand-ig,pixres,2)
-	# 	print(th,thn)
-	# 	print(np.mean(thi))
-	# data.append(['TopHat Radius:',low_TH])
-	# data.append(['Gaussian FWHM:',low_G])
-	# for i in range(len((Freq))):
-	# 	# val = np.genfromtxt('../Stacks/DataSaves/SPTRandom/60arc/SPT_Random_All_%iGHz_60.00Arcmin_0.05pixRes.txt' %Freq[i])
-	# 	Gval = np.genfromtxt('../Stacks/DataSaves/Subsets/SPT_OG/SPT/60arc/SPT_OG(4)_All_%iGHz_60.00Arcmin_0.05pixRes.txt' %Freq[i])
-	# 	print(np.mean(Gval))
-	# 	print(Freq[i])
-	# 	filt=iGauss(Gval,pixres,high,b)
-	# 	data.append(Gval-filt)
-	# MultiStackPlot(data,NSIDE,arc,[2.5,5],['95 GHz','150 GHz','220 GHz'],'SPT_OG_All_Compare','../Stacks/Images/Subsets/SPT_OG/SPT/60arc/',[-0.5,1.5],False)
-	# 	data.append([Freq[i],iProcess(Gval,filt,pixres,low_TH,low_G,b)])
-	# 	# fset.append(filt)
-	# 	# MultiStackPlot([Gval,filt,Gval-filt],NSIDE,arc,carc,['Original','Final Filter Version','Result'],'SPT %iGHz FilterTest'%Freq[i],'../../temp/',[0,0],0)
-	# # 	# for j in range(len(cs)):
-	# # 	# 	print(TH_Only(Gval,600,600,pixres,cs[j],2*cs[j]))
-	# # 	# p1,p2=Process(Gval,[],[6],c,cs,gs,b,pixres)
-	# # 	HS.StackPlot(GFilter2(Gval,pixres,6,0,2.5),NSIDE,arc,[2.5,5],'%iGHz Filtered'%Freq[i],'../Stacks/Images/Subsets/SPT_OG/SPT/60arc/',[-0.25,1.5],0)
-	# 	print('--------------------')
-	# np.save('../Stacks/DataSaves/Subsets/SPT_OG/SPT/60arc/SPT_OG(4)_highz_stats.npy',data)
-	# vals=[-2.35,0.96,8.75]
-	# nvals=[0.63,0.56,0.75]
-	# T_dust=20
-	# z=1
-	# Bset=np.arange(1.1,2.1,0.1)
-	# for b in range(len(Bset)):
-	# 	B=Bset[b]
-	# 	print('B=%.2f',B)
-	# 	Fit_SZ(Freq,vals,nvals,T_dust,z,B,'../Stacks/Images/SZ_Fits/','SPT_OG_All_Fit_Fixed_')
-
-	# fit,nfit=SZ_Beta(Freq,vals,nvals,Tdust,z,True)
-	# print(fit)
-	# print(nfit)
-	# print('--------')
-	# fit,nfit=SZ_Beta(Freq,vals,nvals,Tdust,z,False)
-	# print(fit)
-	# print(nfit)
-
-	# Beta=1
-	# print(Beta)
-	# fit,nfit=SZ_Only(Freq,vals,nvals,Beta,Tdust,z,True)
-	# print(fit)
-	# print(nfit)
-	# print('--------')
-	# fit,nfit=SZ_Only(Freq,vals,nvals,Beta,Tdust,z,False)
-	# print(fit)
-	# print(nfit)
-	# print('Finish Time: ', time.asctime() )
-
-
-##Other Version
-
-
-####Old version in case my adjustments are horribly wrong
-#def SZ_Beta(freqs, vals, val_sigs, starts, bnds): ###Attempt to fit Y-parameter and Beta value (Your dust value should also be the only freq & val within 3 of 217 GHz, should also match up with x_ref, aka x_220 in our case)
-#	for f in range(len(freqs)):
-#		if abs(freqs[f]-217)<=3:
-#			dust_val = vals[f]
-#			dust_sig = val_sigs[f]
-#	rav = np.zeros([3,2])
-#	rav_sig = np.zeros([3,2])
-#	for f in range(len(freqs)):
-#		rav[f,:] = [vals[f], dust_val]
-#		print(rav[f,:])
-#		rav_sig[f,:] = [val_sigs[f], dust_sig]
-#		print(rav_sig[f,:])
-#	print(rav, rav_sig)
-#	def Y_DustFunc(freq, Y, B):
-#		T_CMB = 2.725 #K
-#		k = 1.38*10**(-23) #[J/K]
-#		m = 9.11*10**(-31) #[kg]
-#		h = 6.626*10**(-34) #[J*s]
-#		x_freq = freq*10**9*h/k/T_CMB
-#		x_220 = 220*10**9*h/k/T_CMB
-#		near220 = spsp.factorial(abs((abs(freq-217)//4)-1))/spsp.factorial(abs(freq-217)//4)*abs(freq-217)//4
-##		near220=1
-#		return near220*Y*T_CMB*(x_freq*(np.exp(x_freq)+1)/(np.exp(x_freq)-1)-4)+Dust_val*(x_220/x_freq)**(2-B)*np.exp(x_220-x_freq)*((np.exp(x_freq)-1)/(np.exp(x_220)-1))**2
-#	popt, pcov = curve_fit(Y_DustFunc, freqs, vals, p0 = starts, bounds=bnds, sigma=sigs, absolute_sigma=True)
-#	return popt, pcov

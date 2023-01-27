@@ -4,6 +4,7 @@ from __future__ import division
 import numpy as np 
 import pandas as pd
 import scipy.ndimage as spi
+import matplotlib.pyplot as plt
 import time
 import healpy as hp
 from astropy.io import fits
@@ -37,11 +38,11 @@ def gnomonic(center_dec, center_ra, pix_res, side_size = 60):		###[Deg,Deg,Arcmi
 
 	rad = side_size / 2
 	base = np.arange(-rad, rad+pix_res, pix_res) * np.pi / 180 / 60		###convert to radians here to make it stop doing annoying rounding
-	dr = len(base)
-	base[int(np.rint((dr-1) / 2))] = 0	###Ensuring no float precision issues at the center (for nice, really)
+	DR = len(base)
+	base[int(np.rint((DR-1) / 2))] = 0	###Ensuring no float precision issues at the center (for nice, really)
 	###Gnomonic grid setup
-	x = base * np.ones([dr, dr])
-	y = (base * np.ones([dr, dr])).T[::-1]		###because latitude number goes the other direction....
+	x = base * np.ones([DR, DR])
+	y = (base * np.ones([DR, DR])).T[::-1]		###because latitude number goes the other direction....
 	###Now to change to theta/phi notation
 	rho = np.sqrt(x**2 + y**2)
 	c = np.arctan2(rho, 1)
@@ -50,115 +51,6 @@ def gnomonic(center_dec, center_ra, pix_res, side_size = 60):		###[Deg,Deg,Arcmi
 	p_set = phi + np.arctan2(x*np.sin(c), rho*np.cos(lat)*np.cos(c) - y*np.sin(lat)*np.sin(c))
 	
 	return t_set, p_set
-
-###From CMB_School_Part_03
-def make_2d_gaussian_beam(N, pix_res, fwhm):
-	"""Creates a 2d gaussian beam of size N x N.  pix_res and fwhm should be the same units.
-
-	Parameters
-	----------
-	N: int
-		Side/size of 2d grid desired.
-	pix_res: int or float
-		Pixel resolution of desired grid.  Same units as fwhm
-	fwhm: int or float
-		Gaussian fwhm desired.  Same units as pix_res
-	
-	Returns
-	-------
-	2d numpy.ndarray
-		2d Gaussian grid.
-	
-	"""
-	# make a 2d coordinate system
-	N=int(N)	###Ensures integer form
-	ones = np.ones(N)
-	inds  = (np.arange(N) + 0.5 - N/2.) * pix_res
-	X = np.outer(ones, inds)
-	Y = np.transpose(X)
-	R = np.sqrt(X**2. + Y**2.)
-	# make a 2d gaussian 
-	beam_sigma = fwhm / np.sqrt(8.*np.log(2))
-	gaussian = np.exp(-.5 * (R/beam_sigma)**2.)
-	gaussian = gaussian / np.sum(gaussian)
-	# return the gaussian
-	return gaussian
-
-def GFilter(stamp, pix_res, high_fwhm, low_fwhm):
-	"""2d gaussian filtering of a stamp cutout.
-
-	Parameters
-	----------
-	stamp: numpy.ndarray
-		Cutout or stamp.  Preferably of a symmetric N x N size.
-	pix_res: int or float
-		angular resolution of each stamp pixel.  Must have same units as map_beam_fwhm and new_beam_fwhm.
-	
-	Returns
-	-------
-	numpy.ndarray
-		Gaussian filtered stamp same size as input
-	"""
-	f2s = 1 / (2*np.sqrt(np.log(4)))	
-	high_sig = f2s * high_fwhm / pix_res
-	if high_fwhm != 0:
-		remove = spi.gaussian_filter(stamp, sigma=high_sig)
-		new_stamp = stamp - remove
-	else:
-		new_stamp = np.array(stamp)
-		
-	low_sig = f2s * low_fwhm / pix_res
-	if low_fwhm != 0:
-		new_stamp = spi.gaussian_filter(new_stamp, sigma=low_sig)
-	
-	return new_stamp
-
-def change_stamp_gaussian_beam(stamp, pix_res, map_beam_fwhm, new_beam_fwhm, fft_cut_both = True, cut_val = 0.25):
-	"""Changes a cutout/stamp's Gaussian beam pattern.  **Doesn't take projections into account**  
-	If an entire map is needed to be converted, I suggest using healpix or pixell functions.
-	
-	Parameters
-	----------
-	stamp : numpy array
-		cutout or stamp. Needs to be symmetric N x N size
-	pix_res: int or float
-		angular resolution of each stamp pixel.  Must have same units as map_beam_fwhm and new_beam_fwhm.
-	map_beam_fwhm: int or float
-		Original resolution of map cut from.  Must have same units as pix_size and new_beam_fwhm.
-	new_beam_fwhm: int or float
-		New desired resolution of stamp.  Must have same units as pix_size and map_beam_fwhm.
-	fft_cut_both: bool, optional
-		Option if apply an cut in fft space to prevent spurious noise (Default == True)
-	cut_val: float, optional
-		Fft value to apply cut below of. (Default == 0.25)
-
-	Returns
-	-------
-	numpy.ndarray
-		Same size as input stamp (N x N)	
-	"""
-	
-	###NEW NEW METHOD using fft
-	if map_beam_fwhm > new_beam_fwhm:
-		# make a 2d gaussian of the map beam
-		map_gaussian = make_2d_gaussian_beam(len(stamp),pix_res,map_beam_fwhm)	###Since needs to match size
-		new_gaussian = make_2d_gaussian_beam(len(stamp),pix_res,new_beam_fwhm)	###Since needs to match size
-		# do the convolution
-		map_ft_gaussian=np.fft.fft2(np.fft.fftshift(map_gaussian)) # first add the shift so that it isredeconvolved-rstacks[f] central
-		new_ft_gaussian=np.fft.fft2(np.fft.fftshift(new_gaussian)) # first add the shift so that it is central
-		if fft_cut_both:			###Can't decide if cutting both off at the same frequency location or at 1/sigma location is better
-			new_ft_gaussian[map_ft_gaussian < cut_val] = np.min(np.real(new_ft_gaussian[map_ft_gaussian > cut_val]))
-		else:
-			new_ft_gaussian[map_ft_gaussian < cut_val] = cut_val
-		
-		map_ft_gaussian[map_ft_gaussian < cut_val] = cut_val
-		ft_Map = np.fft.fft2(np.fft.fftshift(stamp)) #shift the map too
-		fft_final = ft_Map * np.real(new_ft_gaussian) / np.real(map_ft_gaussian)
-		deconvolved_map = np.fft.fftshift(np.real(np.fft.ifft2(fft_final)))
-	else:
-		deconvolved_map = GFilter(stamp, pix_res, 0, np.sqrt(new_beam_fwhm**2 - map_beam_fwhm**2))
-	
-	return deconvolved_map
 
 def map_data_healpix_fits(
 		file_name, hdu = 1, nside = 8192, healpix_alm = False, input_nest = False, 
@@ -226,9 +118,10 @@ def map_data_pixell_fits(file_name, **kwargs):
 	return enmap.read_map(file_name, **kwargs)
 
 def stack(
-	map_data, catalog_ra, catalog_dec, side_arcmin, pix_res, data_save_name,
+	map_data, catalog_ra, catalog_dec, side_arcmin, pix_res, data_save_name = None,
 	plate_carree = False, nside = 8192, interpolate = True, verbose = True):
 	"""Gnomonic projection stacking (sum, not average) of a catalog of points from a given map_data.
+	Returns the stack unless data_save_name is specified, then instead saved as a .txt file.
 	
 	Parameters
 	----------
@@ -243,8 +136,8 @@ def stack(
 		Side length of cutout (in arcminutes).
 	pix_res: int or float
 		Angular resolution of each stamp pixel, in units of arcminutes
-	data_save_name: str
-		Save name (and location) of output data. "_%.2farcmin_%.2fpixres.txt" is added to the end
+	data_save_name: str or None, optional
+		If None, just plots final stack. Else, this is save name (and location) of output data. "_%.2farcmin_%.2fpixres.txt" is added to the end
 	plate_carree: bool
 		False (Default) == normally expect Healpix map projection. True == If provided mapdata is in Plate-Carree form
 	nside: int
@@ -256,12 +149,12 @@ def stack(
 	
 	Returns
 	-------
-	None (data saved as text file according to given data_save_name)
+	numpy.ndarray or None (data saved as text file according to given data_save_name + "_%.2farcmin_%.2fpixres.txt"%(side_arcmin, pix_res))
 
 	"""
 	
 	if verbose:
-		print('StartTime: ', time.asctime())	###For logging purposes
+		print("Start Time: ", time.asctime())	###For logging purposes
 	
 	if len(catalog_dec) != len(catalog_ra):  ###Check catalog length
 		raise ValueError("lengths of catalog_dec and catalog_ra do not match!!")
@@ -270,41 +163,46 @@ def stack(
 	if verbose:
 		print("Catalog length: %i"%cat_len)
 
-	stackset = np.zeros([int(np.round(side_arcmin/pix_res) + 1), int(np.round(side_arcmin/pix_res) + 1)])		###Blank stack to start with
+	stack_set = np.zeros([int(np.round(side_arcmin/pix_res) + 1), int(np.round(side_arcmin/pix_res) + 1)])		###Blank stack to start with
 
 	if interpolate:	###bilinear interpolation
 		if plate_carree:	###i.e. ACT, so using pixell defined map instead
 			for c in range(cat_len):	###Cycling through catalog
 				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-				stackset+=map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=1)	###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+				stack_set += map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
 		else:
 			for c in range(cat_len):	###Cycling through catalog
 				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-				stackset+=hp.get_interp_val(map_data, t_set, p_set + np.pi / 2)
+				stack_set += hp.get_interp_val(map_data, t_set, p_set)
 	else:
 		if plate_carree:
 			for c in range(cat_len):	###Cycling through catalog
 				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
-				stackset+=map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+				stack_set += map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
 		else:
 			for c in range(cat_len):	###Cycling through catalog
 				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-				stackset+=map_data[hp.ang2pix(nside, t_set, p_set)]
-	
-	savefile=data_save_name + "_%.2farcmin_%.2fpixres.txt"%(side_arcmin, pix_res)
-	np.savetxt(savefile, stackset, header = "timestamp = %s"%str(time.asctime()))
+				stack_set += map_data[hp.ang2pix(nside, t_set, p_set)]
 	
 	if verbose:
-		print('savename: ', savefile)
-		print('PostStack check ', time.asctime())
+		print("Post-Stack Time: ", time.asctime())
 	
-	return None
+	if data_save_name is None:  ###i.e. quick plotting
+		return stack_set
+	else:
+		savefile = data_save_name + "_%.2farcmin_%.2fpixres.txt"%(side_arcmin, pix_res)
+		np.savetxt(savefile, stack_set, header = "timestamp = %s"%str(time.asctime()))
+		if verbose:
+			print("savename: ", savefile)
+		
+		return None
 
 def stack_cap(
-		map_data, catalog_ra, catalog_dec, cap_radii_arcmin, pix_res, data_save_name,
+		map_data, catalog_ra, catalog_dec, cap_radii_arcmin, pix_res, data_save_name = None,
         plate_carree = False, nside = 8192, interpolate = True, verbose = True):
 	"""Calculates the CAPs (circular apertures, as in Schaan et al. 2021) around a catalog of points from a 
-	given map_data.  Uses gnomonic projection cutouts.  Pandas dataframe saved as .csv
+	given map_data.  Uses gnomonic projection cutouts.  
+	Returns pandas dataframe table unless data_save_name is specified.  Then saved as .csv file.
 	
 	Parameters
 	----------
@@ -334,12 +232,12 @@ def stack_cap(
 	
 	Returns
 	-------
-	None (data saved as csv file according to given data_save_name + "_CAPs_%.2fpixres.csv"%pix_res)
+	pandas.DataFrame or None (data saved as csv file according to given data_save_name + "_CAPs_%.2fpixres.csv"%pix_res)
 
 	"""
 	
 	if verbose:
-		print('StartTime: ', time.asctime())	###For logging purposes
+		print("Start Time: ", time.asctime())	###For logging purposes
 	
 	if len(catalog_dec) != len(catalog_ra):  ###Check catalog length
 		raise ValueError("lengths of catalog_dec and catalog_ra do not match!!")
@@ -351,13 +249,13 @@ def stack_cap(
 	side_arcmin = 3 * np.max(cap_radii_arcmin)	###as real max required would be 2*np.sqrt(2), i.e. < 3 
 
 	if verbose:
-		print('side arc check: ',side_arcmin)
-	dr = int(np.rint(side_arcmin/pix_res + 1))
+		print("side arc check: ",side_arcmin)
+	DR = int(np.rint(side_arcmin/pix_res + 1))
 	
 	def cap_ap(cap_r):
-		cap_kern = np.zeros([dr, dr])
-		X, Y = np.meshgrid(np.arange(dr), np.arange(dr))
-		dist = np.sqrt((X - int(np.rint((dr-1) / 2)))**2 + (Y - int(np.rint((dr-1) / 2)))**2) * pix_res
+		cap_kern = np.zeros([DR, DR])
+		X, Y = np.meshgrid(np.arange(DR), np.arange(DR))
+		dist = np.sqrt((X - int(np.rint((DR-1) / 2)))**2 + (Y - int(np.rint((DR-1) / 2)))**2) * pix_res
 		cap_kern[dist <= np.sqrt(2)*cap_r] = -pix_res**2	###negative portion of outer annulus to subtract
 		cap_kern[dist <= cap_r] = pix_res**2				###positive portion of inner circle to sum
 		return cap_kern
@@ -372,7 +270,7 @@ def stack_cap(
 		if plate_carree:	###i.e. ACT, so using pixell defined map instead
 			for c in range(cat_len):	###Cycling through catalog
 				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-				cutout=map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+				cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
 				temp=[]
 				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 					temp.append(np.sum(cutout * ap))
@@ -381,7 +279,7 @@ def stack_cap(
 		else:
 			for c in range(cat_len):	###Cycling through catalog
 				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-				cutout=hp.get_interp_val(map_data, t_set, p_set + np.pi / 2)
+				cutout = hp.get_interp_val(map_data, t_set, p_set)
 				temp=[]
 				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 					temp.append(np.sum(cutout * ap))
@@ -390,7 +288,7 @@ def stack_cap(
 		if plate_carree:
 			for c in range(cat_len):	###Cycling through catalog
 				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
-				cutout=map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+				cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
 				temp=[]
 				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 					temp.append(np.sum(cutout * ap))
@@ -398,7 +296,7 @@ def stack_cap(
 		else:
 			for c in range(cat_len):	###Cycling through catalog
 				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-				cutout=map_data[hp.ang2pix(nside, t_set, p_set)]
+				cutout = map_data[hp.ang2pix(nside, t_set, p_set)]
 				temp=[]
 				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 					temp.append(np.sum(cutout * ap))
@@ -406,22 +304,28 @@ def stack_cap(
 	
 	###into pandas table
 	ap_vals = pd.DataFrame(ap_vals, columns = ["%.3f"%cap + " [Arcmin]" for cap in cap_radii_arcmin])
-	###And save to a csv table.  
-	savefile = data_save_name + "_CAPs_%.2fpixres.csv"%(pix_res)
-	ap_vals.to_csv(savefile, sep=",", na_rep="  ")
-	# Personally I've preferred pickle (.pkl) for my work due to better read/write speed, but it has sharing/backward compatability issues
-	
 	if verbose:
-		print('savename: ', savefile)
-		print('PostStack check ', time.asctime())
+		print("Post-Stack Time: ", time.asctime())
+	
+	###And return or save to a csv table.  
+	if data_save_name is None:
+		return ap_vals
+	else:
+		savefile = data_save_name + "_CAPs_%.2fpixres.csv"%(pix_res)
+		# Personally I've preferred pickle (.pkl) for my work due to better read/write speed, but it has sharing/backward compatability issues
+		ap_vals.to_csv(savefile, sep=",", na_rep="  ")
+		if verbose:
+			print("savename: ", savefile)
+	
 	
 	return None
 
 def stack_radial_avg(
-		map_data, catalog_ra, catalog_dec, rad_avg_radii_arcmin, pix_res, data_save_name,
+		map_data, catalog_ra, catalog_dec, rad_avg_radii_arcmin, pix_res, data_save_name = None,
     	plate_carree = False, nside = 8192, padding = 2, subtract_mean = True, interpolate = True, verbose = True):
 	"""Calculates the radial averages between provided radii around a catalog of points from a given map_data.  
-	Uses gnomonic projection cutouts.  Pandas dataframe saved as .csv
+	Uses gnomonic projection cutouts.
+	Returns pandas dataframe table unless data_save_name is specified.  Then saved as .csv file.
 	
 	Parameters
 	----------
@@ -455,12 +359,12 @@ def stack_radial_avg(
 	
 	Returns
 	-------
-	None (data saved as csv file according to given data_save_name + "_CAPs_%.2fpixres.csv"%pix_res)
+	pandas.DataFrame or None (data saved as csv file according to given data_save_name + "_CAPs_%.2fpixres.csv"%pix_res)
 
 	"""
 	
 	if verbose:
-		print('StartTime: ', time.asctime())	###For logging purposes
+		print("Start Time: ", time.asctime())	###For logging purposes
 	
 	###Dimension Checks
 	if len(catalog_dec) != len(catalog_ra):  ###Check catalog length
@@ -475,13 +379,13 @@ def stack_radial_avg(
 	side_arcmin = 2*np.max(rad_avg_radii_arcmin) + padding		###as real max required would be 2*np.max(), so optional for extra padding
 
 	if verbose:
-		print('side arc check: ',side_arcmin)
-	dr = int(np.rint(side_arcmin/pix_res + 1))
+		print("side arc check: ",side_arcmin)
+	DR = int(np.rint(side_arcmin/pix_res + 1))
 
 	def radial_avg_ap(r_min, r_max):
-		rad_avg_kern = np.full([dr, dr], np.nan)
-		X, Y = np.meshgrid(np.arange(dr), np.arange(dr))
-		dist = np.sqrt((X - int(np.rint((dr-1) / 2)))**2 + (Y - int(np.rint((dr-1) / 2)))**2) * pix_res
+		rad_avg_kern = np.full([DR, DR], np.nan)
+		X, Y = np.meshgrid(np.arange(DR), np.arange(DR))
+		dist = np.sqrt((X - int(np.rint((DR-1) / 2)))**2 + (Y - int(np.rint((DR-1) / 2)))**2) * pix_res
 		rad_avg_kern[(dist >= r_min) & (dist < r_max)] = 1		###Changing values equal/above rmin (to include 0), and below rmax
 		return rad_avg_kern
 
@@ -508,7 +412,7 @@ def stack_radial_avg(
 			else:
 				for c in range(cat_len):	###Cycling through catalog
 					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-					cutout = hp.get_interp_val(map_data, t_set, p_set + np.pi / 2)
+					cutout = hp.get_interp_val(map_data, t_set, p_set)
 					cutout -= np.mean(cutout)
 					temp=[]
 					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
@@ -547,7 +451,7 @@ def stack_radial_avg(
 			else:
 				for c in range(cat_len):	###Cycling through catalog
 					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-					cutout = hp.get_interp_val(map_data, t_set, p_set + np.pi / 2)
+					cutout = hp.get_interp_val(map_data, t_set, p_set)
 					temp=[]
 					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 						temp.append(np.nanmean(cutout * ap))
@@ -573,13 +477,19 @@ def stack_radial_avg(
 
 	###into pandas table
 	ap_vals = pd.DataFrame(ap_vals, columns = columns)
-	###And save to a csv table.  
-	savefile = data_save_name + "_radial_avg_%.2fpixres.csv"%(pix_res)
-	ap_vals.to_csv(savefile, sep=",", na_rep="  ")
-	# Personally I've preferred pickle (.pkl) for my work due to better read/write speed, but it has sharing/backward compatability issues
 
 	if verbose:
-		print('savename: ',savefile)
-		print('PostStack check ',time.asctime())
+		print("Post-Stack Time: ",time.asctime())
+	
+	###And return or save to a csv table.  
+	if data_save_name is None:
+		return ap_vals
+	else:
+		savefile = data_save_name + "_radial_avg_%.2fpixres.csv"%(pix_res)
+		# Personally I've preferred pickle (.pkl) for my work due to better read/write speed, but it has sharing/backward compatability issues
+		ap_vals.to_csv(savefile, sep=",", na_rep="  ")
+		if verbose:
+			print("savename: ",savefile)
+
 	
 	return None

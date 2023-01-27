@@ -12,6 +12,7 @@ data/2500d_cluster_sample_Bocquet19.fits
 
 ###pycaches just to be safe
 ./__pycache__/
+/.ipynb_checkpoints/
 
 ###analysis_code 
 analysis_code/__pycache__/
