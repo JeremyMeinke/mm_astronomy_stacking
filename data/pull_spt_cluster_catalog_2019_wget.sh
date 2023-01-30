@@ -1,6 +1,6 @@
 #!/bin/bash
 
-### ~~~~~~~~~~~~ Checking if files exist first, since they are 0.5 GB total (and then unpacked) ~~~~~~~~~~~~
+### ~~~~~~~~~~~~ Checking if files exist first ~~~~~~~~~~~~
 FILE=2500d_cluster_sample_Bocquet19.fits
 if [ ! -f $FILE ]; then
 	### ~~~~~~~~~~~~ Getting SPT-SZ Cluster Catalog ~~~~~~~~~~~~

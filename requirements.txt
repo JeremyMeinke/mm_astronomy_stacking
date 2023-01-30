@@ -4,3 +4,4 @@ astropy
 healpy
 pixell
 scipy
+h5py

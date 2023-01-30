@@ -7,8 +7,18 @@ data/combined_map_220GHz_nside8192_ptsrcmasked_50mJy.fits
 data/alm_combined_data_95GHz_ptsrcmasked_50mJy.fits
 data/alm_combined_data_150GHz_ptsrcmasked_50mJy.fits
 data/alm_combined_data_220GHz_ptsrcmasked_50mJy.fits
+
+###Example Catalog
 data/2500d_cluster_sample_Bocquet19.fits
 
+###ACT products
+data/act_dr5.01_auxilliary/
+data/act_planck_dr5.01_s08s18_AA_f090_daynight_fullivar.fits
+data/act_planck_dr5.01_s08s18_AA_f150_daynight_fullivar.fits
+data/act_planck_dr5.01_s08s18_AA_f220_daynight_fullivar.fits
+data/act_planck_dr5.01_s08s18_AA_f090_daynight_map_srcfree.fits
+data/act_planck_dr5.01_s08s18_AA_f150_daynight_map_srcfree.fits
+data/act_planck_dr5.01_s08s18_AA_f220_daynight_map_srcfree.fits
 
 ###pycaches just to be safe
 ./__pycache__/

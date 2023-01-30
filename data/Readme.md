@@ -9,7 +9,8 @@ These inlude:
  but at least for me were less memory-intensive to view (IDK exactly why, something with healpy).
 - *SPT Cluster Catalog* For example stacking of clusters.
 - *ACT DR5* maps.  In their Plate-Carree CAR projection.  Hence requires pixell to run.
-
+- *ACT DR5* fullivar (inverse variance maps).
+- *ACT DR5* Auxilliary products, i.e. frequency/band responses
 
 Also of note: for latest *Planck* maps, see https://irsa.ipac.caltech.edu/data/Planck/release_3/all-sky-maps/
 

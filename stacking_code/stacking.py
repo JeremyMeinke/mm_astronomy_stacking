@@ -11,7 +11,7 @@ from astropy.io import fits
 from pixell import enmap
 import gc
 
-def gnomonic(center_dec, center_ra, pix_res, side_size = 60):		###[Deg,Deg,Arcmin,Arcmin]
+def gnomonic(center_dec, center_ra, pix_res, side_size=60):		###[Deg,Deg,Arcmin,Arcmin]
 	"""Creates a Gnomonic projection grid around center_dec and center_ra.  Returns grids of theta and phi.  
 	NOTE: This should also already correct for instances where THETA goes outside of [0,np.pi] (which would throw an error in healpy)
 
@@ -53,8 +53,8 @@ def gnomonic(center_dec, center_ra, pix_res, side_size = 60):		###[Deg,Deg,Arcmi
 	return t_set, p_set
 
 def map_data_healpix_fits(
-		file_name, hdu = 1, nside = 8192, healpix_alm = False, input_nest = False, 
-		rotation = False, rot_coord = ["G", "C"], rot_lmax = None, unreadable_header = False):
+		file_name, hdu=1, nside=8192, healpix_alm=False, input_nest=False, 
+		rotation=False, rot_coord=["G", "C"], rot_lmax=None, unreadable_header=False):
 	"""Load map_data from healpix-formatted fits file into a ring healpix map format (standard healpy format).
 		***Careful with Planck maps, they can be in nested and galactic formats (though not always...)***
 		
@@ -88,7 +88,7 @@ def map_data_healpix_fits(
 	if healpix_alm:
 		alm = hp.read_alm(file_name)
 		if rotation:
-			rot = hp.rotator.Rotator(coord = rot_coord)
+			rot = hp.rotator.Rotator(coord=rot_coord)
 			alm = rot.rotate_alm(alm, rot_lmax)
 		map_data = hp.alm2map(alm, nside)
 		alm = None; del alm			###attempted memory cleaning
@@ -99,14 +99,14 @@ def map_data_healpix_fits(
 			map_data = map_data.reshape(np.prod(map_data.shape),)	###As some in IDL format with two-dimensional even tho healpy does better with one dim.
 			m = None; del m			###same attempt at memory cleaning
 		else:
-			map_data = hp.read_map(file_name, field = hdu - 1,  dtype = np.float64, nest = input_nest, memmap=True)
+			map_data = hp.read_map(file_name, field=hdu - 1,  dtype=np.float64, nest=input_nest, memmap=True)
 		###Now correcting for nest to rings
 		if input_nest:
-			hp.reorder(map_data, n2r = True)
+			hp.reorder(map_data, n2r=True)
 	
 		###Now applying rotation to map
 		if rotation:
-			rot = hp.rotator.Rotator(coord = rot_coord)
+			rot = hp.rotator.Rotator(coord=rot_coord)
 			map_data = rot.rotate_map_alms(map_data, rot_lmax)
 
 	gc.collect()
@@ -118,8 +118,8 @@ def map_data_pixell_fits(file_name, **kwargs):
 	return enmap.read_map(file_name, **kwargs)
 
 def stack(
-	map_data, catalog_ra, catalog_dec, side_arcmin, pix_res, data_save_name = None,
-	plate_carree = False, nside = 8192, interpolate = True, verbose = True):
+	map_data, catalog_ra, catalog_dec, side_arcmin, pix_res, data_save_name=None,
+	plate_carree=False, nside=8192, interpolate=True, verbose=True):
 	"""Gnomonic projection stacking (sum, not average) of a catalog of points from a given map_data.
 	Returns the stack unless data_save_name is specified, then instead saved as a .txt file.
 	
@@ -141,7 +141,7 @@ def stack(
 	plate_carree: bool
 		False (Default) == normally expect Healpix map projection. True == If provided mapdata is in Plate-Carree form
 	nside: int
-		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2 = npix). Only used if plate_carree = False
+		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2=npix). Only used if plate_carree=False
 	interpolate: bool
 		Whether to employ bi-linear interpolation.  Takes ~4x longer, but can *slightly* reduce noise or artificial pixelization (Default == True)
 	verbose: bool
@@ -168,20 +168,20 @@ def stack(
 	if interpolate:	###bilinear interpolation
 		if plate_carree:	###i.e. ACT, so using pixell defined map instead
 			for c in range(cat_len):	###Cycling through catalog
-				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-				stack_set += map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
+				stack_set += map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=1)	###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
 		else:
 			for c in range(cat_len):	###Cycling through catalog
-				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
 				stack_set += hp.get_interp_val(map_data, t_set, p_set)
 	else:
 		if plate_carree:
 			for c in range(cat_len):	###Cycling through catalog
-				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
-				stack_set += map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin) 
+				stack_set += map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
 		else:
 			for c in range(cat_len):	###Cycling through catalog
-				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
 				stack_set += map_data[hp.ang2pix(nside, t_set, p_set)]
 	
 	if verbose:
@@ -191,15 +191,15 @@ def stack(
 		return stack_set
 	else:
 		savefile = data_save_name + "_%.2farcmin_%.2fpixres.txt"%(side_arcmin, pix_res)
-		np.savetxt(savefile, stack_set, header = "timestamp = %s"%str(time.asctime()))
+		np.savetxt(savefile, stack_set, header="timestamp = %s"%str(time.asctime()))
 		if verbose:
 			print("savename: ", savefile)
 		
 		return None
 
 def stack_cap(
-		map_data, catalog_ra, catalog_dec, cap_radii_arcmin, pix_res, data_save_name = None,
-        plate_carree = False, nside = 8192, interpolate = True, verbose = True):
+		map_data, catalog_ra, catalog_dec, cap_radii_arcmin, pix_res, data_save_name=None,
+        plate_carree=False, nside=8192, interpolate=True, verbose=True):
 	"""Calculates the CAPs (circular apertures, as in Schaan et al. 2021) around a catalog of points from a 
 	given map_data.  Uses gnomonic projection cutouts.  
 	Returns pandas dataframe table unless data_save_name is specified.  Then saved as .csv file.
@@ -219,12 +219,10 @@ def stack_cap(
 		Angular resolution of each stamp pixel, in units of arcminutes
 	data_save_name: str
 		Save name (and location) of output data.   "_CAPs_%.2fpixres.csv" is added to the end
-	file_type: str
-		File type to write pandas table into, i.e. DataFrame.to_"file_type" (Default == "parquet", also used if unknown file_type is given)
 	plate_carree: bool
 		False (Default) == normally expect Healpix map projection. True == If provided mapdata is in Plate-Carree form
 	nside: int
-		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2 = npix). Only used if plate_carree = False
+		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2=npix). Only used if plate_carree=False
 	interpolate: bool
 		Whether to employ bi-linear interpolation.  Takes ~4x longer, but can *slightly* reduce noise or artificial pixelization (Default == True)
 	verbose: bool
@@ -269,8 +267,8 @@ def stack_cap(
 	if interpolate:	###bilinear interpolation
 		if plate_carree:	###i.e. ACT, so using pixell defined map instead
 			for c in range(cat_len):	###Cycling through catalog
-				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-				cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
+				cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
 				temp=[]
 				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 					temp.append(np.sum(cutout * ap))
@@ -278,7 +276,7 @@ def stack_cap(
 				
 		else:
 			for c in range(cat_len):	###Cycling through catalog
-				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
 				cutout = hp.get_interp_val(map_data, t_set, p_set)
 				temp=[]
 				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
@@ -287,15 +285,15 @@ def stack_cap(
 	else:
 		if plate_carree:
 			for c in range(cat_len):	###Cycling through catalog
-				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
-				cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin) 
+				cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
 				temp=[]
 				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 					temp.append(np.sum(cutout * ap))
 				ap_vals.append(temp)
 		else:
 			for c in range(cat_len):	###Cycling through catalog
-				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+				t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
 				cutout = map_data[hp.ang2pix(nside, t_set, p_set)]
 				temp=[]
 				for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
@@ -303,7 +301,7 @@ def stack_cap(
 				ap_vals.append(temp)
 	
 	###into pandas table
-	ap_vals = pd.DataFrame(ap_vals, columns = ["%.3f"%cap + " [Arcmin]" for cap in cap_radii_arcmin])
+	ap_vals = pd.DataFrame(ap_vals, columns=["%.3f"%cap + " [Arcmin]" for cap in cap_radii_arcmin])
 	if verbose:
 		print("Post-Stack Time: ", time.asctime())
 	
@@ -321,8 +319,8 @@ def stack_cap(
 	return None
 
 def stack_radial_avg(
-		map_data, catalog_ra, catalog_dec, rad_avg_radii_arcmin, pix_res, data_save_name = None,
-    	plate_carree = False, nside = 8192, padding = 2, subtract_mean = True, interpolate = True, verbose = True):
+		map_data, catalog_ra, catalog_dec, rad_avg_radii_arcmin, pix_res, data_save_name=None,
+    	plate_carree=False, nside=8192, padding=2, subtract_mean=True, interpolate=True, verbose=True):
 	"""Calculates the radial averages between provided radii around a catalog of points from a given map_data.  
 	Uses gnomonic projection cutouts.
 	Returns pandas dataframe table unless data_save_name is specified.  Then saved as .csv file.
@@ -342,14 +340,12 @@ def stack_radial_avg(
 		Angular resolution of each stamp pixel, in units of arcminutes
 	data_save_name: str
 		Save name (and location) of output data.   "_radial_avg_%.2fpixres.csv" is added to the end
-	file_type: str
-		File type to write pandas table into, i.e. DataFrame.to_"file_type" (Default == "parquet", also used if unknown file_type is given)
 	plate_carree: bool
 		False (Default) == normally expect Healpix map projection. True == If provided mapdata is in Plate-Carree form
 	nside: int
-		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2 = npix). Only used if plate_carree = False
+		Healpix nside expected for given map (Default == 8192, for SPT maps. 12 * nside**2=npix). Only used if plate_carree=False
 	padding: int or float
-		(Default == 2) Extra padding in arcmin to add to cutout size. side_arcmin = 2*np.max(rad_avg_radii_arcmin) + padding
+		(Default == 2) Extra padding in arcmin to add to cutout size. side_arcmin=2*np.max(rad_avg_radii_arcmin) + padding
 	subtract_mean: bool
 		Subtracts mean of each cutout before applying apertures.  This can reduce large-scale flucuations (i.e. foregrounds, Default == True)
 	interpolate: bool
@@ -401,8 +397,8 @@ def stack_radial_avg(
 		if interpolate:	###bilinear interpolation
 			if plate_carree:	###i.e. ACT, so using pixell defined map instead
 				for c in range(cat_len):	###Cycling through catalog
-					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
+					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
 					cutout -= np.mean(cutout)
 					temp=[]
 					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
@@ -411,7 +407,7 @@ def stack_radial_avg(
 					
 			else:
 				for c in range(cat_len):	###Cycling through catalog
-					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
 					cutout = hp.get_interp_val(map_data, t_set, p_set)
 					cutout -= np.mean(cutout)
 					temp=[]
@@ -421,8 +417,8 @@ def stack_radial_avg(
 		else:
 			if plate_carree:
 				for c in range(cat_len):	###Cycling through catalog
-					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
-					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin) 
+					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
 					cutout -= np.mean(cutout)
 					temp=[]
 					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
@@ -430,7 +426,7 @@ def stack_radial_avg(
 					ap_vals.append(temp)
 			else:
 				for c in range(cat_len):	###Cycling through catalog
-					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
 					cutout = map_data[hp.ang2pix(nside, t_set, p_set)]
 					cutout -= np.mean(cutout)
 					temp=[]
@@ -441,8 +437,8 @@ def stack_radial_avg(
 		if interpolate:	###bilinear interpolation
 			if plate_carree:	###i.e. ACT, so using pixell defined map instead
 				for c in range(cat_len):	###Cycling through catalog
-					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
-					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
+					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=1)	 ###np.pi/2 bc mapdata.at requires declination input (not theta). bilinear interp for order=1
 					temp=[]
 					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 						temp.append(np.nanmean(cutout * ap))
@@ -450,7 +446,7 @@ def stack_radial_avg(
 					
 			else:
 				for c in range(cat_len):	###Cycling through catalog
-					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
 					cutout = hp.get_interp_val(map_data, t_set, p_set)
 					temp=[]
 					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
@@ -459,15 +455,15 @@ def stack_radial_avg(
 		else:
 			if plate_carree:
 				for c in range(cat_len):	###Cycling through catalog
-					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin) 
-					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order = 0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin) 
+					cutout = map_data.at(np.asarray([np.pi/2 - t_set, p_set]), order=0)	###np.pi/2 bc mapdata.at requires declination input (not theta)
 					temp=[]
 					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
 						temp.append(np.nanmean(cutout * ap))
 					ap_vals.append(temp)
 			else:
 				for c in range(cat_len):	###Cycling through catalog
-					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size = side_arcmin)
+					t_set, p_set = gnomonic(catalog_dec[c], catalog_ra[c], pix_res, side_size=side_arcmin)
 					cutout = map_data[hp.ang2pix(nside, t_set, p_set)]
 					temp=[]
 					for ap in apertures:	###creating a list of all apertures meaured, per cutout (catalog location)
@@ -476,7 +472,7 @@ def stack_radial_avg(
 
 
 	###into pandas table
-	ap_vals = pd.DataFrame(ap_vals, columns = columns)
+	ap_vals = pd.DataFrame(ap_vals, columns=columns)
 
 	if verbose:
 		print("Post-Stack Time: ",time.asctime())
