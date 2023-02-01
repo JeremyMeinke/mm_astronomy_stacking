@@ -691,15 +691,15 @@ def powerlaw_mass_correction_by_convolving(
 			exit()
 		g1 = gaussian(logm_range.ravel(), 1, np.mean(logm_range), sed_sigma)
 		g2 = gaussian(logm_range.ravel(), 1, mass_distr_mean, uncon_sigma)
-		return spi.convolve1d(pl_w(logm_range), g1,mode="constant", origin=0, axis=0) / spi.convolve1d(g1, g2, mode="constant", origin=0)[...,None]
+		return 10**(spi.convolve1d(pl_w(logm_range), g1,mode="constant", origin=0, axis=0) / spi.convolve1d(g1, g2, mode="constant", origin=0)[...,None])
 	else:	###i.e. m_range is a 1d array, which is fine
 		g1 = gaussian(logm_range, 1, np.mean(logm_range), sed_sigma)
 		g2 = gaussian(logm_range, 1, mass_distr_mean, uncon_sigma)
-		return spi.convolve1d(pl_w(logm_range), g1, mode="constant", origin=0, axis=-1) / spi.convolve1d(g1, g2, mode="constant", origin=0)
+		return 10**(spi.convolve1d(pl_w(logm_range), g1, mode="constant", origin=0, axis=-1) / spi.convolve1d(g1, g2, mode="constant", origin=0))
 
 def powerlaw_mass_correction_mbinned(
 		mbin_centers: list or np.ndarray, mbin_widths: float or list or np.ndarray, pl_amplitude: float, pl_slope: float, sed_sigma: float,
-		mass_distr_sigmas: float or list or np.ndarray, mass_distr_means: float or list or np.ndarray, norms: list or np.ndarray=None, pl_lin: bool=True) -> np.ndarray:
+		mass_distr_sigmas: float or list or np.ndarray, mass_distr_means: float or list or np.ndarray, norms: list or np.ndarray = None, pl_lin: bool = True) -> np.ndarray:
 	"""Mass correction of a given set of mass bin measurements (given in log10(M/M_sun) dex), 
 	where the mass distribution is described by a set of Gaussians and said masses have their own sed_sigma and 
 	the expected unconvolved function is a power-law: A*(M/M_p)^alpha.  M_p is the peak mass as determined by the provided gaussian fit of the original mass distribution.
@@ -766,7 +766,7 @@ def powerlaw_mass_correction_mbinned(
 	if pl_lin:
 		def pl(log_mass, m_lower, m_upper):
 			###Log-log method (bc fitting procedure if given is_linear=True plugs in zero...)
-			return ((xlog_y_pl(log_mass, xlog_peak=logmass_peak, pl_amplitude=pl_amplitude, pl_slope=pl_slope))) * pl_weight(log_mass, m_lower, m_upper)	
+			return ((xlog_y_pl(log_mass, xlog_peak=logmass_peak, pl_amplitude=pl_amplitude, pl_slope=pl_slope, return_linear=False))) * pl_weight(log_mass, m_lower, m_upper)	
 	else:
 		def pl(log_mass, m_lower, m_upper):
 			return xlog_ylog_pl(log_mass, xlog_peak=logmass_peak, log_pl_amplitude=pl_amplitude, pl_slope=pl_slope) * pl_weight(log_mass, m_lower, m_upper)	
