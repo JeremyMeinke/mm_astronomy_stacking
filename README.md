@@ -1,4 +1,4 @@
-# mm_stacking
+# mm_astronomy_stacking
 
 Relevant code and examples used in analysis and stacking of mm astronomical maps and data.  Specifically public SPT-SZ and ACT DR5 data.
 
