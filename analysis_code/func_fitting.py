@@ -151,8 +151,8 @@ def sigma_levels_nd_gaussian(n, s):
 
 def func_fit(
 	func_to_fit: Callable, x_values: np.ndarray or list, y_values: np.ndarray, func_params: List["FuncParam"], variance: float or np.ndarray = None, method: str = "BE", 
-	best_fit: str = "median", absolute_variance: bool = True, MemoryOverride: bool = False, ci_method: str = "standard", showBnds_1D: list or np.ndarray = [1], showFitValues: bool = True, 
-	showBnds_2D: list or np.ndarray = [1,2,3], quick_corner_plot: bool = True, corner_plot_save_name: str = None, save_format: str = "png", within_n_dim_bnds: list = [], return_marg_dists: list = None, font_size: float = 12, verbose: bool = False, **func_to_fit_kwargs):
+	best_fit: str = "median", absolute_variance: bool = True, MemoryOverride: bool = False, ci_method: str = "standard", return_1d_sigmas: list = [1, 2, 3],
+	quick_corner_plot: bool = True, corner_plot_save_name: str = None, within_n_dim_bnds: list = [], return_marg_dists: list = None, verbose: bool = False, **func_to_fit_kwargs):
 	"""Using BE (Bayesian Estimation, Default) or GLS (Generalized Least Squares) to fit given data to the desired func_to_fit function.
 	
 	Parameters
@@ -161,20 +161,16 @@ def func_fit(
 		function(x_values, func_params)
 		Desired function to fit. Should be capable of numpy array scaling/vectorizing.
 		Requires a set of independent x_values and func_params parameter objects to pass through func_toFit.  
-		
-	
 	x_values: list, array, or list of arrays (<- emphasis on LIST of arrays)
 		Independent variable(s). 
 		Will be converted to np.ndarray by stacking along the axis=-1 to preserve numpy vectorization??...
-	
 	y_values: list or array
 		Dependent variables(s)/measurements.  Should be same lenth as x_values. 
 		Will be converted to np.ndarray with np.asarray()...
-	
 	func_params: list of FuncParam
 		List of func_param(func_name, text_name, fit_range, and prior_weight) objects
 		func_name == kwarg name to be passed through func_toFit
-		text_name == raw string name to be pass through all plots, etc.  i.e. r"2 S$_\nu$"
+		text_name == raw string name to be pass through all plots, etc.  i.e. r"2 S$_\mu$"
 		fit_range == set of all fit values to attempt to fit for.  If constant, provide as int, float, or len==1 array (or pass as **func_to_fit_kwargs).  
 		Array only used in generating BE probability density.  GLS only looks at if non-constant (array of len>1)
 		prior_weight == If any prior is desired, must be same size as fit_range.  Fit with method="GLS" does not currently take any priors into account.
@@ -182,64 +178,45 @@ def func_fit(
 		For method "BE" (Default), each fitting parameter's fit_range must be assigned a 1D array (len > 1) covering the desired values to generate the probabilty density over.
 		For method "GLS", each fitting parameter's fit_range must be assigned a 1D array (len > 1) to be considered non-constant.  
 		If non-constant (np.ndarray w/ len > 1), actual fit_range values do not matter (GLS does not generate probability densities)
-	
 	variance: None, float, 1D array, or 2D array (covariance matrix)
 		(Default) None == All variances are assumed equal-weighted.
 		Float == All variances assumed same provided float value.  
 		1D array == Individual variances for each measurement, assumed independent from each other.
 		2D array (Covariance Matrix) == Full covariance matrix, equivalent to 1D if off-diagonals are all zero (further equivalent to float if all same).
-
 	method: str, optional
 		Either "BE" or "GLS"
 		(Default) "BE" == Bayesian Estimation.  Valid for non-linear fits (careful defining ranges for func_toFitParams which can greatly impact fit & accuracy)
 		"GLS" == Generalized Least Squares.  Valid for linear fits (Regression), often much faster since probability densities do not have to be generated.  Priors are not considered.
-	
 	best_fit: str, optional
 		Either "median", "average", "peak1d", or "peak"
 		(Default) "median" == Best fit reported is median of 1D parameter densities (50th percentile).  Commonly used in astronomy & academic results.  Median will also be reported if unrecognized value is passed.
 		"average" == Best fit reported is mean of 1D parameter density distribution.
 		"peak1d" == Highest probability of 1D distribution.
 		"peak" == Highest probability of p-dimensional distribution (for p total parameters fit).
-
 	absolute_variance: bool, optional
 		(Default) True == Variances passed represents the variance in absolute sense
 		False == Variances passed are only relative magnitudes.  Final reported covariance matrix is scaled by the sample variance of the residuals of the fit
-	
 	MemoryOverride: bool, optional 
 		(Default == False) If you want to bypass a warning inplace to prevent BE from creating large arrays over ~4 GB in size.
-
 	ci_method: str, optional
 		Confidence Interval method for 1D bounds.  (Default) "standard" == quantile selection where lower and upper bounds exlude an equal percentage. 
 		Else, calculates most probable marginalized densities first (not recommended, but was old way).
-
-	showBnds_1D: list or ndarray = [1] : 
-		(Default) [1] (show only 1 sigma bounds)
-		Can select [1,2,3] corresponding to 1, 2, or 3 sigma 1D bounds.
-	
-	showFitValues: bool = True : 
-	Show best fit values and associated (1-sigma) errors above diagonals of corner plot.  1-sigma errors are currently only option to show as of now.
-
-	showBnds_2D: list or ndarray = [1,2,3] : 
-		(Default) [1,2,3] corresponding to 1, 2, or 3 sigma, 2D bounds.
-		Show sigma bounds on 2D contour, can select any set of sigma bounds, but need to be monatonically increasing. 
-
+	return_1d_sigmas: list, optional
+		get 1d sigma bounds/levels/limits for each 1d marginal distribution (per fit parameter)
+		Only used when method = "BE". Default == [1, 2, 3] (1, 2, and 3 sigma levels)
 	quick_corner_plot: bool, optional
-		(Default) True == Generate and show corner plot of parameter posterior distributions (For method="BE" only)
-
+		(Default) True == Generate and show corner plot of parameter posterior distributions (For method = "BE" only)
 	corner_plot_save_name: str, optional
 		If quick_corner_plot == True. (Default) "", results in corner plot showing and not saving.  Any other string will result in it being saved.
-	
 	within_n_dim_bnds: list = [] : 
 		List of sigma bounds to return all possible (n #) parameter combinations within.  Corresponds to n-dimensional gaussian bounds, used in func_fitPlot.
-	
 	return_marg_dists: list = None
 		list (or list of lists) of desired densities to return marginal distributions of.  
 		Example: For func_params (to fit) "a","b", and "c" , a return_marg_densities=[["a"],["a","b"]] will return a dictionary of:
 		A 1-d prob density array of marginal distribution of "a" (marginalized over "b" and "c"), 
 		and a 2-d prob density array of marginal distribution of "a" and "b", (marginalized over "c")
-
 	**func_to_fit_kwargs: 
-		Any additional kwargs needed passed through func_toFit.
+		Any additional kwargs needed passed through func_to_fit.
 
 	"""
 	if verbose:
@@ -371,14 +348,11 @@ def func_fit(
 
 			###Calculating confidence interval bounds out to 3 sigma in 1D marginalized probabilities
 			if ci_method.lower() == "standard":	###Selecting percentiles upper and lower
-				fit_param_1d_error_bnds.append([ci_edges(p_1d_density, fit_ranges[p], sigma_levels_nd_gaussian(1, i+1)) for i in range(3)])	###cycling through 1-3 sigma levels
+				fit_param_1d_error_bnds.append([ci_edges(p_1d_density, fit_ranges[p], sigma_levels_nd_gaussian(1, i+1)) for i in return_1d_sigmas])	###cycling through 1-3 sigma levels
 			else:	###Old way... selecting highest probabilities first til reaching desired interval/level... not standard and doesn't work well with non-normal distributions (when multiple peaks)
-				s1 = prob_level(p_1d_density, sigma_levels_nd_gaussian(1, 1))		###1 Sigma level
-				s2 = prob_level(p_1d_density, sigma_levels_nd_gaussian(1, 2))		###2-Sigma level
-				s3 = prob_level(p_1d_density, sigma_levels_nd_gaussian(1, 3))		###3-Sigma level
-				s_levels = [s1, s2, s3]
-				errorBnds = [[np.min(fit_ranges[p][p_1d_density >= s]), np.max(fit_ranges[p][p_1d_density >= s])] for s in s_levels]
-				fit_param_1d_error_bnds.append(errorBnds)
+				s_levels = [prob_level(p_1d_density, sigma_levels_nd_gaussian(1, i)) for i in return_1d_sigmas]
+				error_bnds = [[np.min(fit_ranges[p][p_1d_density >= s]), np.max(fit_ranges[p][p_1d_density >= s])] for s in s_levels]
+				fit_param_1d_error_bnds.append(error_bnds)
 			
 			###Determining the "Best Fit" value of the parameter
 			if best_fit.lower() == "peak1d":
@@ -393,30 +367,14 @@ def func_fit(
 			
 
 			###Calculating covariance estimate from 1d probability (needed to know what we considered the "Best Fit" first tho...)
-			fit_param_cov[p, p] = np.sum(p_1d_density*(fit_ranges[p]-best_fit_params[p])**2)	###a weighted covariances around the determined best fit
+			fit_param_cov[p, p] = np.sum(p_1d_density * (fit_ranges[p]-best_fit_params[p])**2)	###a weighted covariances around the determined best fit
 		fit_param_1d_error_bnds = np.asarray(fit_param_1d_error_bnds)
-		###Generating 2D densities for covariance estimates and corner plot
-		fit_param_2d_densities = []
-		fit_param_2d_levels = []
+		###Generating 2D densities for covariance estimates
 		for p1 in range(fit_param_len):
-			fit_param_2d_densities.append([])
-			fit_param_2d_levels.append([])
-			for p2 in range(fit_param_len)[:p1]:
+			for p2 in range(p1):
 				p_2d_density = np.sum(prob_density, axis=tuple(np.delete(np.arange(fit_param_len), [p1, p2])))		###Summing along all axes except the TWO parameters of interest
 				p_2d_density /= np.sum(p_2d_density)		###Normalizing
-				fit_param_2d_densities[p1].append(p_2d_density)
-
-				###Determining the levels for 1, 2, and 3 sigma (the correct way now...)
-				temp = []
-				for s in showBnds_2D:
-					temp.append(prob_level(p_2d_density, sigma_levels_nd_gaussian(2, s)))
-				for t in range(len(temp[1:])):
-					if temp[t+1] >= temp[t]:
-						temp[t+1] = np.copy(temp[t]) / 1.000001
-				fit_param_2d_levels[p1].append(temp)
 				
-
-				###Covariances
 				fit_param_cov[p1, p2] = fit_param_cov[p2, p1] = np.sum(p_2d_density * ((fit_ranges[p2][:, None]-best_fit_params[p2]) * (fit_ranges[p1][None, :]-best_fit_params[p1])))
 		if verbose:
 			print("BE Best Fits: ", best_fit_params)
@@ -430,6 +388,7 @@ def func_fit(
 		if quick_corner_plot:
 			cmap = mpl.colors.LinearSegmentedColormap.from_list("", ["white", "lightblue", "royalblue", "navy"])
 			## Create temporary marginalized densities to pass through corner plot code:
+			print("No corner plot yet...")
 	
 	###Generating sigma bounds when applicable
 	b_bnds = {}
@@ -439,7 +398,6 @@ def func_fit(
 			s_locs = np.where(prob_density >= s)
 			param_bnds = {tofit_func_params[f].func_name : fit_ranges[f][s_locs[f]] for f in range(fit_param_len)}
 			b_bnds[r"%.1f $\sigma$"%b] = param_bnds
-	best_fit_params = dict([[tofit_func_params[f].func_name, best_fit_params[f]] for f in range(fit_param_len)])
 
 	marg_dists = {}
 	if method == "BE" and bool(return_marg_dists):	###For when densities are also desired
@@ -450,18 +408,7 @@ def func_fit(
 			else:
 				marg_dists["Marginal Distribution of: " + ", ".join(return_marg_dists)] = np.sum(prob_density, axis=tuple(tofit_func_params_keys.index(k) for k in tofit_func_params_keys if k not in return_marg_dists))
 			
-			# t = True
-			# ## If single density desired
-			# if np.prod(return_marg_densities.shape) > 0:
-			# 	t = type(return_marg_densities[0]) is not list
-			# if len(return_marg_densities.shape) == 1 and t:
-			# 	# temp = np.sum(prob_density, axis=tuple(tofit_func_params_keys.index(k) for k in return_marg_densities))
-			# 	# marg_densities[("Marginalized over: " + ", ".join(list(return_marg_densities)))] = temp / np.sum(temp)
-			# else:
-			# 	for r in return_marg_densities:
-			# 		# temp = np.sum(prob_density, axis=tuple(tofit_func_params_keys.index(k) for k in r))
-			# 		# marg_densities[("Marginalized over: " + ", ".join(list(r)))] = temp / np.sum(temp)
-	
+	best_fit_params = dict([[tofit_func_params[f].func_name, best_fit_params[f]] for f in range(fit_param_len)])
 	gc.collect()	###To try to keep memory usage in check (for loops, etc)
 	if method == "GLS":	###Return Best Fit and covariance
 		return best_fit_params, fit_param_cov
@@ -471,179 +418,8 @@ def func_fit(
 		return best_fit_params, fit_param_cov, fit_param_1d_error_bnds, b_bnds, marg_dists
 
 
-###Since func_fit is getting too cumbersome...
-def plot_func_fit(func_to_plot : Callable, x_values : list or np.ndarray, y_values : list or np.ndarray, yerrs: list or np.ndarray = None, x_showFit_vals : None or list or np.ndarray = None, val_label : str = "Data", axis_labels : list or np.ndarray = [r"x",r"y"], 
-best_fit_params: dict = None, fit_param_combos : dict = None, linear_paramNames : list or np.ndarray = None, param_scale: dict = None, xlims : list or tuple = [], ylims : list or tuple = [], xscale : str = None, yscale : str = None, grid : bool = True, 
-cmap : mpl.colors.Colormap = mpl.colors.LinearSegmentedColormap.from_list("",["white","lightblue","royalblue","navy"]), cmap_sigma_max : float = 4, discrete_colors : list or np.ndarray = None, save_name : str = None, save_format : str = "png", continue_plot : bool = False, font_size : float = 12, **func_toplot_kwargs):
-	"""Takes b_bnds output from funcFit and plots sigma bounds along with any provided data.
-	
-	Parameters
-	--------------
-	func_to_plot: Callable : 
-	Function to plot best fit and sigma bounds
-
-	x_values: list or np.ndarray  : 
-	1D locations to plot, may be different than x_values that would be passed to func in fitting process
-
-	y_values: list or np.ndarray : 
-	1D array, measured values to plot
-
-	yerrs: list or np.ndarray = None : 
-	yerrs to be passed directly through to plt.errorbar(), can be 1D list/array or 2D with a row for min and max (respectively)... 
-	see matplotlib.pyplot.errorbar for more specifics.
-
-	x_showFit_vals: None or list or np.ndarray : 
-	x_values to be used for plotting best fit and sigma bounds, will be passed through func_toPlot.  
-	If None, it will be generated from 0.9 to 1.1 times min and max of x_values (respectively) for best fit (and sigma bounds if fit_param_combos is still given).
-
-	val_label: str = "Data" : 
-	Label for data points in plot legend.
-
-	axis_labels: list or np.ndarray = [r"x",r"y"] : 
-	Labels for plot axes.
-
-	best_fit_params: dict = None : 
-	Dictionary of best fit param from funFit output[0].
-
-	fit_param_combos: dict = None : 
-	Nested dictionary of fit param combinations that make up sigma bounds, from funcFit output[3].
-
-	linear_paramNames: list or np.ndarray = None : 
-	1D list or array to specify any parameters that are linear (such as those defined as is_linear=True in func_param class).  Should be func_name that will be passed to func_toPlot.
-
-	param_scale: dict = None : 
-	Dictionary in the event of any parameters need scaling (such as by some factor of 10) to match data points.  Keys should be same func_name as fit params.
-
-	xlims: list or tuple = [] : 
-	Plot x-limits to pass through plt.xlims()
-
-	ylims: list or tuple = [] : 
-	Plot y-limits to pass through plt.ylims()
-
-	xscale: str = None : 
-	String to pass through plt.xscale(), such as "log" or "symlog"
-	
-	yscale: str = None : 
-	String to pass through plt.yscale(), such as "log" or "symlog"
-
-	grid: bool = True : 
-	Show plot grid
-
-	cmap: mpl.colors.Colormap = mpl.colors.LinearSegmentedColormap.from_list("",["white","lightblue","royalblue","navy"])  : 
-	Colormap to pass for defining different sigma bounds.  Selection is set to: cmap(0.9-(float(list(fit_param_combos.keys()))-1)/(len(fit_param_combos)))
-
-	cmap_sigma_max: float = 4 : 
-	cmap selection is linear, thus need to determine max sigma to classify as 0 (default==white) color
-
-	discrete_colors: list or np.ndarray = None : 
-	1D list or array of strings, defining discrete colors of sigma bounds, should be at least as long as number of sigma bounds in fit_param_combos.
-	Note: Data points (from x_values and y_values) and best_fit will still use the color of cmap(1.0).
-	
-	save_name: str = None : 
-	Desired savename, excluding format type which will is defined separately.  Make sure to provide file path if different directory is desired.
-
-	save_format: str = "png" : 
-	Save format for plot, .png is default, other standard plt.savefig options available such as "jpg", "pdf", etc.
-
-	continue_plot: bool = False : 
-	If desired to neither savefig nor show plot, but plot something else in addition afterwards.  
-	Such as calling this plot_funcFit mupltiple times for different data sets to compare.  *Make sure to change colormap/colors accordingly
-
-	font_size: float = 12 :
-	font size for text in plot.  Both axes will have this exact float pt size, legend will be 2 pts smaller.
-
-	**func_toplot_kwargs : 
-	Any additional kwargs to pass through to func_toPlot, such as constants, extra kwargs, etc.
-
-
-	Returns
-	--------------
-
-	None
-
-	Either shows or saves the plot according to your choice in "save_name : str = None" above.
-
-	"""
-
-	if best_fit_params:
-		print(func_to_plot(x_showFit_vals, **best_fit_params, **func_toplot_kwargs).shape)
-		if list(x_showFit_vals):
-			plt.plot(x_showFit_vals, func_to_plot(x_showFit_vals, **best_fit_params, **func_toplot_kwargs), label="Best Fit", color=cmap(1.0), marker="")
-		else:
-			x_showFit_vals = np.linspace(np.min(x_values)*0.9, np.max(x_values)*1.1, num=50)
-			plt.plot(x_showFit_vals, func_to_plot(x_showFit_vals, **best_fit_params, **func_toplot_kwargs), label="Best Fit", color=cmap(1.0), marker="")
-		if fit_param_combos:
-			mins = []
-			maxes = []
-			for p in fit_param_combos:
-				###Check if any parameters need scaling
-				if param_scale:
-					for i in param_scale:
-						fit_param_combos[p][i] *= param_scale[i]
-				if linear_paramNames is not None:
-					linears = np.asarray([fit_param_combos[p][l] for l in linear_paramNames])
-					nonlin = dict(fit_param_combos[p])
-					for l in linear_paramNames:
-						del nonlin[l]
-					###Check to ensure param_combos isn't being affected
-					# print(nonlin.keys())
-					# print(param_combos[p].keys())
-					constant = func_to_plot(x_showFit_vals[...,None], **nonlin, **dict([[l,0] for l in linear_paramNames]), **func_toplot_kwargs)
-					linear_vals = [func_to_plot(x_showFit_vals[...,None], **nonlin, **dict([[l,0] for l in linear_paramNames if l!=i]), **dict([[i,1]]), **func_toplot_kwargs) for i in linear_paramNames]
-					result = constant
-					for l in range(len(linear_vals)):
-						result = result + linears[l]*(linear_vals[l]-constant)
-				else:
-					result = func_to_plot(x_showFit_vals[...,None], **p, **func_toplot_kwargs)
-				mins.append(result.min(axis=1))
-				maxes.append(result.max(axis=1))
-			for n in range(len(mins))[::-1]:
-				###Have to plot in reverse to ensure the narrower bands are not covered up...
-				if discrete_colors:
-					plt.fill_between(x_showFit_vals, maxes[n], mins[n], label=list(fit_param_combos.keys())[n], color=discrete_colors[n], alpha=0.5)
-				else:
-					plt.fill_between(x_showFit_vals, maxes[n], mins[n], label=list(fit_param_combos.keys())[n], color=cmap(0.95-0.95*(float(list(fit_param_combos.keys())[n][:-9])-1)/(cmap_sigma_max)), alpha=0.5)		###cmap(0.9-(float(list(fit_param_combos.keys())[n][:-9])-1)/(len(fit_param_combos)))
-
-	###Plotting values, moving to last so they always show above sigma fill-betweens...
-	if yerrs:
-		plt.errorbar(x_values, y_values, yerr=yerrs, label=val_label, color=cmap(1.0))
-	else:
-		plt.scatter(x_values, y_values, label=val_label, color=cmap(1.0))
-
-	plt.legend(fontsize=(font_size-2))
-	if xlims:
-		plt.xlim(xlims)
-	if ylims:
-		plt.ylim(ylims)
-	if xscale:
-		plt.xscale(xscale)
-	if yscale:
-		plt.yscale(yscale)
-	
-	plt.xlabel(axis_labels[0], size=font_size)
-	plt.ylabel(axis_labels[1], size=font_size)
-	plt.tick_params(labelsize=font_size)
-	if grid:
-		plt.grid()
-	
-	if save_name:
-		plt.savefig("%s.%s"%(save_name, save_format), dpi=400, bbox_inches="tight")
-		plt.cla()
-		plt.clf()
-		plt.close("all")
-		return None
-	elif continue_plot:		###Where multiple sets of data or sigma bounds are desired to be plotted.
-		return None
-	else:
-		plt.show()
-		plt.cla()
-		plt.clf()
-		plt.close("all")
-		return None	
-
-
 # def cornerplot_from_margs(
-# 		marg_func_params, margs, legend_names=None, showBnds_2D=[1,2,3], axis_mins=None, axis_maxs=None,
+# 		marg_func_params, margs, legend_names=None, bnds_2d=[1, 2, 3], axis_mins=None, axis_maxs=None,
 # 		cmaps=[mpl.colors.LinearSegmentedColormap.from_list("", ["white", "lightblue", "royalblue", "navy"])], cmap_sigma_max=4, alpha=0.8, font_size=12, save_name=None):
 # 	"""Create corner plot from Bayesian Estimate marginalized probabilities such as from output of func_fit()
 	
@@ -656,6 +432,8 @@ cmap : mpl.colors.Colormap = mpl.colors.LinearSegmentedColormap.from_list("",["w
 # 		list of dicts (for multiple data sets)
 # 	legend_names: list, optional
 # 		List of names to use in legend for each set of margs.  Default == None (no legend made)
+# 	bnds_2d: list, optional
+# 		Default == [1, 2, 3]
 # 	axis_mins: list, optional
 # 		1d list of axis range min limits, corresponding to same order as provided FuncParams.
 # 		Default == None, where mins are extracted from lowest provided FuncParam.fit_range (per uniquely named FuncParam)
@@ -666,29 +444,62 @@ cmap : mpl.colors.Colormap = mpl.colors.LinearSegmentedColormap.from_list("",["w
 # 	"""
 	
 # 	space = 0.2
-# 	marg_len = len(marg_func_params)
+# 	marg_text = "Marginal Distribution of: "
+# 	## Formatting to ensure that marg_func_params and margs are as expected
+# 	## Check margs list (if multiple margs are desired to be plotted)
 # 	if isinstance(margs, list):
+# 		if len(margs) == 1:                            ## Just one marg still passed
+# 			margs = margs[0]                         ## Then just take it out of list
+# 		elif not isinstance(marg_func_params[0], list):  ## Expect list of lists of FuncParams
+# 			raise ValueError("len(margs) > 1, so expected but did not get marg_func_params to be a list of lists (FuncParams per marg)")
+	
+# 	## Check when expecting only one marg set to plot
+# 	if isinstance(margs, dict) and isinstance(marg_func_params[0], list):  ##One marg passed but not a 1d list
+# 		if len(marg_func_params) == 1:            ## If a list of single list
+# 			marg_func_params = marg_func_params[0]   ## Convert to 1d list
+# 		else:
+# 			raise ValueError("Expected marg_func_params to be one list of FuncParams, not list of multiple lists")
+	
+# 	## Now re-listing for when a single set of margs or marg_func_params are given (for easier scalability)
+# 	if isinstance(margs, dict):
+# 		margs = [margs]
+# 		marg_func_params = [marg_func_params]
+	
+# 	## Grabbing order of FuncParams passed from first list of marg_func_params
+# 	marg_func_keys = [p.func_name for p in marg_func_params[0]]	## Keys to combine to find marg
+# 	func_param_len = len(marg_func_keys)						## Length of FuncParams per marg
+# 	marg_len = len(margs)										## Length of margs wanted plotted	
 
-# 	# marg_1d_names=["Marginalized over: "+", ".join(marg_param_names[:i]+marg_param_names[i+1:]) for i in range(marg_len)]
+
+
 # 	# marg_names = [["Marginalized over: "+", ".join(marg_param_names[n] for n in range(marg_len) if (n!=i and n!=j)) for i in range(marg_len)] for j in range(marg_len)]
 # 	marg_names = np.array(marg_names)
 # 	print(marg_names)
 # 	print(marg_names.shape)
 	
-# 	fig,axs = plt.subplots(nrows=marg_len, ncols=marg_len, sharex='col', figsize=(1+2*marg_len, 1+2*marg_len))
+# 	def find_marg(marg_set, func_name1, func_name2):
+# 		try:
+# 			return marg_set[marg_text + ", ".join([func_name1, func_name2])]
+# 		except:
+# 			try:
+# 				return marg_set[marg_text + ", ".join([func_name2, func_name1])]
+# 			except:
+# 				return None
+
+# 	fig,axs = plt.subplots(nrows=marg_len, ncols=marg_len, sharex="col", figsize=(1+2*marg_len, 1+2*marg_len))
 # 	###Finding the contour bounds
-# 	if not isinstance(margs, list):	###i.e. only one set to plot
-# 		margs = [margs]
-# 	for m in range(len(margs)):
+# 	for m in range(marg_len):
 # 		fit_param_2d_levels = []
-# 		for p1 in range(marg_len):
+
+# 		for p1 in range(func_param_len):			## Rows
 # 			fit_param_2d_levels.append([])
-# 			for p2 in range(marg_len)[:p1]:
+# 			for p2 in range(p1):					## Columns
 # 				###Determining the levels for 1, 2, and 3 sigma (the correct way now...)
 # 				temp = []
 # 				print(marg_names[p1, p2])
-# 				for s in showBnds_2D:
-# 					temp.append(prob_level(margs[m][marg_names[p1, p2]], sigma_levels_nd_gaussian(2, s)))
+# 				for s in bnds_2d:
+# 					temp_marg = find_marg(margs[m], marg_func_keys[p1], marg_func_keys[p2])
+# 					temp.append(prob_level(temp_marg, sigma_levels_nd_gaussian(2, s)))
 # 				for t in range(len(temp[1:])):
 # 					if temp[t+1] >= temp[t]:
 # 						temp[t+1] = np.copy(temp[t]) / 1.000001
