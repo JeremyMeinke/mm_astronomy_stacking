@@ -106,7 +106,7 @@ def ci_edges(prob_1d, prob_range, ci):
 	csum=np.cumsum(prob_1d) / np.sum(prob_1d)
 	return [np.min(prob_range[csum >= (1-ci)/2]), np.min(prob_range[csum >= (1+ci)/2])]		###has to be min bc arrays must be of size>0
 
-def gaussian_range_prior(mean, sigma, step_resolution, sigma_range=3):
+def gaussian_range_prior(mean: float, sigma: float, step_resolution: float, sigma_range: float = 3):
 	"""returns a fit_range and fit_prior_weight about a desired mean/center, and out to 3 sigma (Default sigma_range=3)
 	For use with FuncParam class to pass through func_fit()
 	
@@ -215,9 +215,16 @@ def func_fit(
 		Example: For func_params (to fit) "a","b", and "c" , a return_marg_densities=[["a"],["a","b"]] will return a dictionary of:
 		A 1-d prob density array of marginal distribution of "a" (marginalized over "b" and "c"), 
 		and a 2-d prob density array of marginal distribution of "a" and "b", (marginalized over "c")
+	verbose: bool, optional
+		Option to view printed checkpoints, info, etc within function. Default == False
 	**func_to_fit_kwargs: 
 		Any additional kwargs needed passed through func_to_fit.
 
+	Returns
+	-------
+	dict, np.ndarray, (in addition if method="BE":) dict, dict, dict
+	(parameter best fits, estimate covariance, 
+	(and BE only) 1d sigma bounds as in return_1d_sigmas, parameter combos for provided sigma bound within_n_dim_bnds, and marginal distributions as return_marg_dists)
 	"""
 	if verbose:
 		print("---- func_fit of %s ----"%str(func_to_fit.__name__))
@@ -234,11 +241,12 @@ def func_fit(
 	tofit_func_params = [p for p in func_params if not p.constant]
 	fit_param_len = len(tofit_func_params)
 	fit_param_shape = [len(p.fit_range) for p in tofit_func_params]
+	tofit_func_params_keys = [p.func_name for p in tofit_func_params]
 
 	if verbose:
 		print("y_values length: ", N)
 		print("Constant Parameters: ", const_func_kwargs)
-		print("Variable/to-Fit Parameter Function Names: ", [p.func_name for p in tofit_func_params])
+		print("Variable Parameter Function Names: ", [p.func_name for p in tofit_func_params])
 
 	## Inverse covariance matrix
 	if variance is None:							## Then assume all y values are evenly weighted
@@ -281,6 +289,7 @@ def func_fit(
 				print("Variance scaled by: ",scale)
 		
 		fit_param_cov = np.linalg.inv(x_matrix.T@inv_cov@x_matrix) * scale
+		best_fit_params = dict([[tofit_func_params[f].func_name, best_fit_params[f]] for f in range(fit_param_len)])
 
 
 	## Now the BE method:
@@ -376,6 +385,8 @@ def func_fit(
 				p_2d_density /= np.sum(p_2d_density)		###Normalizing
 				
 				fit_param_cov[p1, p2] = fit_param_cov[p2, p1] = np.sum(p_2d_density * ((fit_ranges[p2][:, None]-best_fit_params[p2]) * (fit_ranges[p1][None, :]-best_fit_params[p1])))
+		
+		best_fit_params = dict([[tofit_func_params[f].func_name, best_fit_params[f]] for f in range(fit_param_len)])
 		if verbose:
 			print("BE Best Fits: ", best_fit_params)
 			print("1D Error Bounds: \n", fit_param_1d_error_bnds, "\n")
@@ -383,13 +394,31 @@ def func_fit(
 
 		prob_density /= np.max(prob_density)		###Normalize to max
 		
+		def marg_calc(param_names, normed=True):
+			"""Created marginal distribution for desired parameters 
+			(summing over all others not desired and rearranging axis order to match order provided)"""
+			param_names = list(dict.fromkeys(param_names))	## Requiring Python >= 3.7, quick way to remove any duplicates that would mess np.moveaxis up
+			marged = np.sum(np.moveaxis(prob_density, [tofit_func_params_keys.index(i) for i in param_names], [*range(len(param_names))]), axis=tuple([*range(-(fit_param_len-len(param_names)), 0)]))
+			if normed:
+				return marged/np.max(marged)
+			else:
+				return marged
+	
 		################ Corner Plotting ################
 		## Moving this to a separate callable function to reduce the absurd number of parameters passed through func_fit()
 		if quick_corner_plot:
-			cmap = mpl.colors.LinearSegmentedColormap.from_list("", ["white", "lightblue", "royalblue", "navy"])
 			## Create temporary marginalized densities to pass through corner plot code:
-			print("No corner plot yet...")
+			marg_set_2d = {}
+			for p1 in range(fit_param_len):
+				for p2 in range(p1+1, fit_param_len):
+					marg_set_2d["Marginal Distribution of: " + ", ".join([tofit_func_params_keys[p1], tofit_func_params_keys[p2]])] = marg_calc([tofit_func_params_keys[p1], tofit_func_params_keys[p2]])
+			if verbose:
+				print("Corner Plot # of 2d Marg. Distrs. : ", len(marg_set_2d))
+				print(list(marg_set_2d.keys()))
+			cornerplot_from_margs(tofit_func_params, marg_set_2d, best_fits=best_fit_params, show_fit_1sigmas=True, verbose=verbose)
+			# print("No corner plot yet...")
 	
+
 	###Generating sigma bounds when applicable
 	b_bnds = {}
 	if  method == "BE" and within_n_dim_bnds:
@@ -401,14 +430,12 @@ def func_fit(
 
 	marg_dists = {}
 	if method == "BE" and bool(return_marg_dists):	###For when densities are also desired
-			tofit_func_params_keys = [p.func_name for p in tofit_func_params]
 			if isinstance(return_marg_dists[0], list):	###List of lists:
 				for margs in return_marg_dists:
-					marg_dists["Marginal Distribution of: " + ", ".join(margs)] = np.sum(prob_density, axis=tuple(tofit_func_params_keys.index(k) for k in tofit_func_params_keys if k not in margs))
+					marg_dists["Marginal Distribution of: " + ", ".join(margs)] = marg_calc(margs) #np.sum(prob_density, axis=tuple(tofit_func_params_keys.index(k) for k in tofit_func_params_keys if k not in margs))
 			else:
-				marg_dists["Marginal Distribution of: " + ", ".join(return_marg_dists)] = np.sum(prob_density, axis=tuple(tofit_func_params_keys.index(k) for k in tofit_func_params_keys if k not in return_marg_dists))
+				marg_dists["Marginal Distribution of: " + ", ".join(return_marg_dists)] = marg_calc(return_marg_dists) #np.sum(prob_density, axis=tuple(tofit_func_params_keys.index(k) for k in tofit_func_params_keys if k not in return_marg_dists))
 			
-	best_fit_params = dict([[tofit_func_params[f].func_name, best_fit_params[f]] for f in range(fit_param_len)])
 	gc.collect()	###To try to keep memory usage in check (for loops, etc)
 	if method == "GLS":	###Return Best Fit and covariance
 		return best_fit_params, fit_param_cov
@@ -418,217 +445,323 @@ def func_fit(
 		return best_fit_params, fit_param_cov, fit_param_1d_error_bnds, b_bnds, marg_dists
 
 
-# def cornerplot_from_margs(
-# 		marg_func_params, margs, legend_names=None, bnds_2d=[1, 2, 3], axis_mins=None, axis_maxs=None,
-# 		cmaps=[mpl.colors.LinearSegmentedColormap.from_list("", ["white", "lightblue", "royalblue", "navy"])], cmap_sigma_max=4, alpha=0.8, font_size=12, save_name=None):
-# 	"""Create corner plot from Bayesian Estimate marginalized probabilities such as from output of func_fit()
+def cornerplot_from_margs(
+		marg_func_params, margs, legend_names=None, bnds_2d=[1, 2, 3], axis_mins=None, axis_maxs=None, best_fits=None, show_fit_1sigmas=False,
+		ci_method="standard", cmaps=[mpl.colors.LinearSegmentedColormap.from_list("", ["white", "lightblue", "royalblue", "navy"])],
+		cmap_sigma_max=4, alpha=0.8, font_size=14, save_name=None, verbose=False):
+	"""Create corner plot from Bayesian Estimate marginalized probabilities such as from output of func_fit()
 	
-# 	marg_func_params: list
-# 		List of all FuncParam, as passed through func_fit().  If multiple sets of margs used, this should be a 
-# 		list of lists (each index for each func_fit).  Each list should then contain the same set of FuncParam.func_names.
-# 		Order of cornerplot dictated by the order of first list of parameters.
-# 	margs: dict or List[dict]
-# 		Dict of all 2d marg_dists arrays as created by func_fit's return_marg_dists parameter, or
-# 		list of dicts (for multiple data sets)
-# 	legend_names: list, optional
-# 		List of names to use in legend for each set of margs.  Default == None (no legend made)
-# 	bnds_2d: list, optional
-# 		Default == [1, 2, 3]
-# 	axis_mins: list, optional
-# 		1d list of axis range min limits, corresponding to same order as provided FuncParams.
-# 		Default == None, where mins are extracted from lowest provided FuncParam.fit_range (per uniquely named FuncParam)
-# 	axis_maxs: list, optional
-# 		1d list of axis range max limits, corresponding to same order as provided FuncParams.
-# 		Default == None, where maxs are extracted from lowest provided FuncParam.fit_range (per uniquely named FuncParam)
-
-# 	"""
+	marg_func_params: list
+		List of all FuncParam, as passed through func_fit().  If multiple sets of margs used, this should be a 
+		list of lists (each index for each func_fit).  Each list should then contain the same set of FuncParam.func_names.
+		Order of cornerplot dictated by the order of first list of parameters.
+	margs: dict or List[dict]
+		Dict of all 2d marg_dists arrays as created by func_fit's return_marg_dists parameter, or
+		list of dicts (for multiple data sets)
+	legend_names: list, optional
+		List of names to use in legend for each set of margs.  Default == None (no legend made)
+	bnds_2d: list, optional
+		Default == [1, 2, 3]
+	axis_mins: list, optional
+		1d list of axis range min limits, corresponding to same order as provided FuncParams.
+		Default == None, where mins are extracted from lowest provided FuncParam.fit_range (per uniquely named FuncParam)
+	axis_maxs: list, optional
+		1d list of axis range max limits, corresponding to same order as provided FuncParams.
+		Default == None, where maxs are extracted from lowest provided FuncParam.fit_range (per uniquely named FuncParam)
+	best_fits: dict or List[dict], optional
+		best fit values if wanted to show dashed line on 1d distribution plots. Default == None (no dashed line at best fit value)
+	show_fit_1sigmas: bool, optional
+		Whether to should text above diagonal axes with best fit and 1d sigma bounds. Default == False
+	ci_method: str, optional
+		Confidence Interval method for 1D bounds.  (Default) "standard" == quantile selection where lower and upper bounds exlude an equal percentage. 
+		Else, calculates most probable marginalized densities first (not recommended, but was old way).
+	cmaps: mpl.colors.Colormap or List[mpl.colors.Colormap], optional
+		List of colormaps to use for contourf.  Needs to match length of margs provided.
+	cmap_sigma_max: int, optional
+		Scale factor to attempt to sample colormap at uniform intervals.
+	alpha: float, optional
+		alpha passed to matplotlib.pyplot functions (transparency, where 1 == not and 0 == full transparency)
+	font_size: float, optional
+		font size used in plot.  Note: shown fit and 1 sigmas will have a font_size - 2
+	save_name: str, optional
+		save name to pass if wanted to save.  Default == None, will instead just show the plot
+	verbose: bool, optional
+		Option to view printed checkpoints, info, etc within function. Default == False
 	
-# 	space = 0.2
-# 	marg_text = "Marginal Distribution of: "
-# 	## Formatting to ensure that marg_func_params and margs are as expected
-# 	## Check margs list (if multiple margs are desired to be plotted)
-# 	if isinstance(margs, list):
-# 		if len(margs) == 1:                            ## Just one marg still passed
-# 			margs = margs[0]                         ## Then just take it out of list
-# 		elif not isinstance(marg_func_params[0], list):  ## Expect list of lists of FuncParams
-# 			raise ValueError("len(margs) > 1, so expected but did not get marg_func_params to be a list of lists (FuncParams per marg)")
+	Returns
+	-------
+	None, Plot is either shown or saved if provided save_name.
+	"""
 	
-# 	## Check when expecting only one marg set to plot
-# 	if isinstance(margs, dict) and isinstance(marg_func_params[0], list):  ##One marg passed but not a 1d list
-# 		if len(marg_func_params) == 1:            ## If a list of single list
-# 			marg_func_params = marg_func_params[0]   ## Convert to 1d list
-# 		else:
-# 			raise ValueError("Expected marg_func_params to be one list of FuncParams, not list of multiple lists")
+	space = 0.2
+	marg_text = "Marginal Distribution of: "
+	## Formatting to ensure that marg_func_params and margs are as expected
+	## Check margs list (if multiple margs are desired to be plotted)
+	if isinstance(margs, list):
+		if len(margs) == 1:                            ## Just one marg still passed
+			margs = margs[0]                         ## Then just take it out of list
+		elif not isinstance(marg_func_params[0], list):  ## Expect list of lists of FuncParams
+			raise ValueError("len(margs) > 1, so expected but did not get marg_func_params to be a list of lists (FuncParams per marg)")
 	
-# 	## Now re-listing for when a single set of margs or marg_func_params are given (for easier scalability)
-# 	if isinstance(margs, dict):
-# 		margs = [margs]
-# 		marg_func_params = [marg_func_params]
+	## Check when expecting only one marg set to plot
+	if isinstance(margs, dict) and isinstance(marg_func_params[0], list):  ##One marg passed but not a 1d list
+		if len(marg_func_params) == 1:            ## If a list of single list
+			marg_func_params = marg_func_params[0]   ## Convert to 1d list
+		else:
+			raise ValueError("Expected marg_func_params to be one list of FuncParams, not list of multiple lists")
 	
-# 	## Grabbing order of FuncParams passed from first list of marg_func_params
-# 	marg_func_keys = [p.func_name for p in marg_func_params[0]]	## Keys to combine to find marg
-# 	func_param_len = len(marg_func_keys)						## Length of FuncParams per marg
-# 	marg_len = len(margs)										## Length of margs wanted plotted	
-
-
-
-# 	# marg_names = [["Marginalized over: "+", ".join(marg_param_names[n] for n in range(marg_len) if (n!=i and n!=j)) for i in range(marg_len)] for j in range(marg_len)]
-# 	marg_names = np.array(marg_names)
-# 	print(marg_names)
-# 	print(marg_names.shape)
+	## Now re-listing for when a single set of margs or marg_func_params are given (for easier scalability)
+	if isinstance(margs, dict):
+		margs = [margs]
+		marg_func_params = [marg_func_params]
 	
-# 	def find_marg(marg_set, func_name1, func_name2):
-# 		try:
-# 			return marg_set[marg_text + ", ".join([func_name1, func_name2])]
-# 		except:
-# 			try:
-# 				return marg_set[marg_text + ", ".join([func_name2, func_name1])]
-# 			except:
-# 				return None
-
-# 	fig,axs = plt.subplots(nrows=marg_len, ncols=marg_len, sharex="col", figsize=(1+2*marg_len, 1+2*marg_len))
-# 	###Finding the contour bounds
-# 	for m in range(marg_len):
-# 		fit_param_2d_levels = []
-
-# 		for p1 in range(func_param_len):			## Rows
-# 			fit_param_2d_levels.append([])
-# 			for p2 in range(p1):					## Columns
-# 				###Determining the levels for 1, 2, and 3 sigma (the correct way now...)
-# 				temp = []
-# 				print(marg_names[p1, p2])
-# 				for s in bnds_2d:
-# 					temp_marg = find_marg(margs[m], marg_func_keys[p1], marg_func_keys[p2])
-# 					temp.append(prob_level(temp_marg, sigma_levels_nd_gaussian(2, s)))
-# 				for t in range(len(temp[1:])):
-# 					if temp[t+1] >= temp[t]:
-# 						temp[t+1] = np.copy(temp[t]) / 1.000001
-# 				fit_param_2d_levels[p1].append(temp)
-# 		print(fit_param_2d_levels)
-
-# 		for i in range(marg_len):	###Corner plot rows
-# 			for j in range(marg_len):	###Corner plot cols
-# 				if j > i and m == 0:
-# 					fig.delaxes(axs[i, j])
-# 				elif i == j:		###1D marginalized distributions
-# 					axs[i, j].set_yticks([])
-# 					if i != 0:
-# 						axs[i, j].get_yaxis().set_visible(False)
-# 					axs[i, j].plot(margs_1d_ranges[i], margs[m][marg_names[i,i]]/np.max(margs[m][marg_names[i,i]]), marker="", linestyle="-")
-# 					axs[i, j].set_ylim([0, 1.1])
-# 				elif i > j:
-# 					if j != 0:	###i.e. not leftmost
-# 						axs[i, j].sharey(axs[i, 0])
-# 						axs[i, j].tick_params(labelleft=False)	###To not show tick labels on inside plots
-# 					axs[i, j].contourf(*np.meshgrid(margs_1d_ranges[j], margs_1d_ranges[i]), margs[m][marg_names[i][j]].T, levels=[fit_param_2d_levels[i][j][::-1][b] for b in range(len(showBnds_2D))]+[1], colors=[cmaps[m](0.95-0.95*(b-1)/(cmap_sigma_max)) for b in showBnds_2D[::-1]], alpha=alpha)
-# 				axs[i, j].minorticks_on()
-# 		# if showFitValues:		###For 1 sigma values only (since any other would likely be confusing.... maybe add options later)
-# 		# 	if np.max(np.abs(fit_ranges[i])) < 0.01:
-# 		# 		try:
-# 		# 			factor = np.ceil(abs(np.log10(np.abs(best_fit_params[i]))))
-# 		# 			# if factor==np.inf:	###Happens when best fit is zero...
-# 		# 		except:
-# 		# 			try:
-# 		# 				factor=np.ceil(abs(np.log10(fit_param_1d_errorBnds[i,0,1]-best_fit_params[i])))		###So instead use factor of highest bound
-# 		# 			except:
-# 		# 				factor = np.ceil(np.abs(np.log10(np.max(fit_ranges[i]))))
-# 		# 				warnings.warn("Best fit %s and 1 Sigma bound are either not clearly defined or overlapping... you might need to readjust your bounds or resolution..."%tofit_func_params[i].text_name,UserWarning)
-# 		# 			# if factor==np.inf:	###ANDDDDD if even the upper bound is also zero... just use max of fit ranges.... chances are resolution needs to be improved....
-						
-# 		# 		# print(factor)	###CHECK
-# 		# 		sf = math.ceil(max(0, -np.log10(np.max(fit_ranges[i][1:]-fit_ranges[i][:-1])*10**factor)))		###Sig fig selection for float display
-# 		# 		axs[i, j].set_title(tofit_func_params[i].text_name+r"=$%.*f_{-%.*f}^{+%.*f}\times10^{-%i}$"%(sf, best_fit_params[i]*10**factor, sf, (best_fit_params[i]-fit_param_1d_errorBnds[i,0,0])*10**factor, sf, (fit_param_1d_errorBnds[i,0,1]-best_fit_params[i])*10**factor, factor), size=(font_size-2))
-# 		# 	elif np.max(np.abs(fit_ranges[i])) > 1000:
-# 		# 		factor = np.floor(abs(np.log10(np.abs(best_fit_params[i]))))
-# 		# 		# print(factor)	###CHECK
-# 		# 		sf = math.ceil(max(0, -np.log10(np.max(fit_ranges[i][1:]-fit_ranges[i][:-1])/10**factor)))		###Sig fig selection for float display
-# 		# 		axs[i, j].set_title(tofit_func_params[i].text_name+r"=$%.*f_{-%.*f}^{+%.*f}\times10^{%i}$"%(sf,best_fit_params[i]/10**factor, sf, (best_fit_params[i]-fit_param_1d_errorBnds[i,0,0])/10**factor, sf, (fit_param_1d_errorBnds[i,0,1]-best_fit_params[i])/10**factor, factor), size=(font_size-2))
-# 		# 	else:
-# 		# 		sf = math.ceil(max(0,-np.log10(np.max(fit_ranges[i][1:]-fit_ranges[i][:-1]))))		###Sig fig selection for float display
-# 		# 		axs[i, j].set_title(tofit_func_params[i].text_name+r"=$%.*f_{-%.*f}^{+%.*f}$"%(sf,best_fit_params[i],sf,best_fit_params[i]-fit_param_1d_errorBnds[i,0,0],sf,fit_param_1d_errorBnds[i,0,1]-best_fit_params[i]),size=(font_size-2))
-# 	for i in range(marg_len):
-# 		if axis_maxs[i] < 0.2:		###Have to do this AFTER the plot is generated in order to grab the scientific notation text
-# 			plt.subplots_adjust(wspace=space, hspace=space)	###General default is 0.2, so increasing slightly to prevent any sci notation overlap
-# 			axs[i, 0].ticklabel_format(style="sci", scilimits=(0, 0))
-# 			axs[-1, i].ticklabel_format(style="sci", scilimits=(0, 0))
-# 			axs[i, 0].figure.canvas.draw()
-# 			axs[i, 0].yaxis.get_offset_text().set_visible(False)
-# 			axs[-1, i].xaxis.get_offset_text().set_visible(False)
-# 			axs[i, 0].set_ylabel(marg_param_text_names[i] + "  [" + axs[i, 0].get_yaxis().get_offset_text().get_text() + "]", size=font_size)
-# 			axs[-1, i].set_xlabel(marg_param_text_names[i] + "  [" + axs[-1, i].get_xaxis().get_offset_text().get_text() + "]", size=font_size)
-# 		elif axis_maxs[i] > 1000:
-# 			plt.subplots_adjust(wspace=space, hspace=space)	###General default is 0.2, so increasing slightly to prevent any sci notation overlap
-# 			axs[i, 0].ticklabel_format(style="sci", scilimits=(0,0))
-# 			axs[-1, i].ticklabel_format(style="sci", scilimits=(0,0))
-# 			axs[i, 0].figure.canvas.draw()
-# 			axs[i, 0].yaxis.get_offset_text().set_visible(False)
-# 			axs[-1, i].xaxis.get_offset_text().set_visible(False)
-# 			axs[i, 0].set_ylabel(marg_param_text_names[i] + "  [" + axs[i,0].get_yaxis().get_offset_text().get_text() + "]",size=font_size)
-# 			axs[-1, i].set_xlabel(marg_param_text_names[i] + "  [" + axs[-1,i].get_xaxis().get_offset_text().get_text() + "]",size=font_size)
-# 		else:
-# 			axs[i, 0].set_ylabel(marg_param_text_names[i], size=font_size)
-# 			axs[-1, i].set_xlabel(marg_param_text_names[i], size=font_size)
-# 	###Setting upper left corner
-# 	axs[0, 0].set_ylabel(marg_param_text_names[0], sfunc_toPlotize=font_size, labelpad=16)
-# 	###now ensuring left subplots have same y-axes as bottom subplot's x-axes...
-# 	for i in range(1, marg_len):
-# 		axs[-1, i].set_xlim(axis_mins[i], axis_maxs[i])
-# 		axs[i, 0].set_yticks(axs[-1,i].get_xticks())
-# 		axs[i, 0].set_ylim(axs[-1,i].get_xlim())	###I guess the order matters here?? lim needed after ticks or else ticks will overwrite???? Cool.
+	## Grabbing order of FuncParams passed from first list of marg_func_params
+	func_param_names = [p.func_name for p in marg_func_params[0]]		## Keys to combine to find marg
+	func_param_len = len(func_param_names)								## Length of FuncParams per marg
+	func_param_text_names = [p.text_name for p in marg_func_params[0]]	## 
+	marg_len = len(margs)												## Length of margs wanted plotted	
+	if verbose:
+		print("Marg. Function Parameters: ", func_param_names)
+		print("Marg. Length: ", marg_len)
+		print("Marg [0] names: ", list(margs[0].keys()))
 	
-# 	###placing the legend above center... or attempting to....
-# 	if legend_names:
-# 		proxy = [plt.Rectangle((0, 0), 1, 1, fc=cmaps[i](1.0), alpha=alpha) for i in range(len(legend_names))]
-# 		fig.legend(proxy, legend_names, loc="center", bbox_to_anchor=axs[0, 1].get_position(), fontsize=font_size)
+	## Best fits check:
+	if isinstance(best_fits, dict):	
+		best_fits = [best_fits]
+	if (best_fits is not None) and (len(best_fits) != marg_len):
+		raise ValueError("Best_fits provided but does not seem to match number of margs given (%i)"%marg_len)
 
-# 	if save_name:
-# 		plt.savefig(save_name, dpi=400, bbox_inches="tight")
-# 	else:
-# 		plt.tight_layout()
-# 		plt.show()
-# 	plt.cla()
-# 	plt.clf()
-# 	plt.close("all")	###To save memory
-# 	return None
+	## Similar for cmaps:
+	if isinstance(cmaps, mpl.colors.Colormap):
+		cmaps=[cmaps]
+	if len(cmaps) != marg_len:
+		raise ValueError("Number of colormaps in cmaps does not match expected number of margs given (%i)"%marg_len)
+
+	## If mins/maxs = None
+	if axis_mins is None:
+		axis_mins = []
+		for i in range(func_param_len):
+			mins = [np.min(marg_func_params[m][n].fit_range) for m in range(marg_len) for n in range(func_param_len) if marg_func_params[m][n].func_name == func_param_names[i]]
+			axis_mins.append(np.min(mins))
+
+	if verbose:
+		print("Axis Mins: ", axis_mins)
+	if axis_maxs is None:
+		axis_maxs = []
+		for i in range(func_param_len):
+			maxs = [np.max(marg_func_params[m][n].fit_range) for m in range(marg_len) for n in range(func_param_len) if marg_func_params[m][n].func_name == func_param_names[i]]
+			axis_maxs.append(np.max(maxs))
+	
+	if verbose:
+		print("Axis Maxs: ", axis_maxs)
+
+	def find_marg(marg_set, param_name1, param_name2):
+		try:
+			return marg_set[marg_text + ", ".join([param_name1, param_name2])]
+		except:
+			try:
+				return (marg_set[marg_text + ", ".join([param_name2, param_name1])]).T	## Transpose it to keep axis order correct (func_name1 axis along first?)
+			except:
+				return None
+
+	fig,axs = plt.subplots(nrows=func_param_len, ncols=func_param_len, sharex="col", figsize=(1+2*func_param_len, 1+2*func_param_len))
+
+	## prep for if stating best fits as well:
+	if show_fit_1sigmas and best_fits:
+		fit_text = [[] for i in range(func_param_len)]
+		order_of = []
+		for f in func_param_names:		## We will use the first list of best_fits to set the order of magnitudes
+			if best_fits[0][f] == 0:						## Should only happen when f == 0
+				order_of.append(0)
+			else:
+				order_of.append(np.floor(np.log10(np.abs(best_fits[0][f]))))
+
+	for m in range(marg_len):
+		this_marg_param_names = [p.func_name for p in marg_func_params[m]]	## in the event that they differ
+		fit_param_2d_levels = []
+		## Finding the 2d contour bounds
+		for p1 in range(func_param_len):			## Rows
+			fit_param_2d_levels.append([])
+			for p2 in range(p1):					## Columns
+				###Determining the levels for 1, 2, and 3 sigma (the correct way now...)
+				temp = []
+				for s in bnds_2d:
+					temp_marg = find_marg(margs[m], func_param_names[p1], func_param_names[p2])
+					temp.append(prob_level(temp_marg, sigma_levels_nd_gaussian(2, s)))
+				for t in range(len(temp)):
+					if temp[t] == 1.0:		## Since we don't want any to be set to 1.0, as that'll be the upper bound (see axs[i, j].contourf below)
+						temp[t] -= 1e-5
+				for t in range(len(temp[1:])):
+					if temp[t+1] >= temp[t]:
+						temp[t+1] = np.copy(temp[t]) / 1.000001
+				fit_param_2d_levels[p1].append(temp)
+				if verbose:
+					print("indices: ", p1, p2)
+					print("2d levels: ", temp)
+		if verbose:
+			print("Marg[%i] 2D Levels: "%m, fit_param_2d_levels)
+		for i in range(func_param_len):		## Corner plot rows
+			for j in range(func_param_len):	## Corner plot cols
+				if j > i and m == 0:		## Delete upper right plots (duplicates of lower left corner plots)
+					fig.delaxes(axs[i, j])
+				elif i == j:				## 1D marginalized distribution plots
+					axs[i, j].set_yticks([])
+					if i != 0:
+						axs[i, j].get_yaxis().set_visible(False)
+						marg_1d = find_marg(margs[m], func_param_names[i], func_param_names[i-1]).sum(axis=-1)	## Marginalize the nearest 2d marg from "above"
+					else:
+						marg_1d = find_marg(margs[m], func_param_names[i], func_param_names[i+1]).sum(axis=-1)	## If 0th row/column, marginalize the nearest 2d marg on the "right"
+					axs[i, j].plot(marg_func_params[m][this_marg_param_names.index(func_param_names[i])].fit_range, marg_1d/np.max(marg_1d), marker="", linestyle="-", color=cmaps[m](1.0), alpha=alpha)
+					axs[i, j].set_ylim([0, 1.1])
+					## If best fits are provided:
+					if best_fits:
+						axs[i, j].vlines(best_fits[m][func_param_names[i]], 0, 1.1, color=cmaps[m](1.0), linestyle="--", alpha=alpha)
+					if (m == 0) and (marg_func_params[0][i].has_prior):
+						axs[i, j].plot(marg_func_params[0][i].fit_range, marg_func_params[0][i].prior_weight/np.max(marg_func_params[0][i].prior_weight), marker="", linestyle="-.", color="grey")
+				elif i > j:
+					if j != 0:	## i.e. not leftmost
+						axs[i, j].sharey(axs[i, 0])
+						axs[i, j].tick_params(labelleft=False)	## To not show tick labels on inside plots
+					y_range = marg_func_params[m][this_marg_param_names.index(func_param_names[i])].fit_range	## Since i is axis grid row (y axis)
+					x_range = marg_func_params[m][this_marg_param_names.index(func_param_names[j])].fit_range	## And hence j is axis grid column (x axis)
+					axs[i, j].contourf(x_range, y_range, find_marg(margs[m], func_param_names[i], func_param_names[j]), levels=[fit_param_2d_levels[i][j][::-1][b] for b in range(len(bnds_2d))]+[1], colors=[cmaps[m](0.95-0.95*(b-1)/(cmap_sigma_max)) for b in bnds_2d[::-1]], alpha=alpha)
+				axs[i, j].minorticks_on()
+		## Grabbing best fit + 1 sigma values to place above
+			if show_fit_1sigmas and best_fits:
+				y_range = marg_func_params[m][this_marg_param_names.index(func_param_names[i])].fit_range	## Since i is axis grid row (y axis)
+				## calc 1d bounds like in func_fit:
+				if ci_method.lower() == "standard":	## Selecting percentiles upper and lower
+					sigma_bounds = ci_edges(marg_1d, y_range, sigma_levels_nd_gaussian(1, 1))	## Grabbing 1 sigma levels
+				else:	## Old way... selecting highest probabilities first til reaching desired interval/level... not standard and doesn't work well with non-normal distributions (when multiple peaks)
+					s_level = prob_level(marg_1d, sigma_levels_nd_gaussian(1, 1))
+					sigma_bounds = [[np.min(y_range[marg_1d >= s_level]), np.max(y_range[marg_1d >= s_level])]]
+				
+				sig_fig = math.ceil(max(0, -np.log10(np.max(y_range[1:]-y_range[:-1]) / pow(10, order_of[i]))))
+
+				fit_text[i].append(r"%.*f_{-%.*f}^{+%.*f}"%(sig_fig, best_fits[m][func_param_names[i]]/pow(10, order_of[i]), sig_fig, (best_fits[m][func_param_names[i]]-sigma_bounds[0])/pow(10, order_of[i]), sig_fig, (sigma_bounds[1]-best_fits[m][func_param_names[i]])/pow(10, order_of[i])))
+	## Placing best fits + 1 sigmas above diagonal 1d plots... allowing for multiple values/margs but probably will be crowded
+	if show_fit_1sigmas and best_fits:
+		if verbose:
+			print("Title best fit text: ", fit_text)
+		for i in range(func_param_len):
+			if order_of[i] == 0:	## Don't need the 10^0 crowding things
+				axs[i, i].set_title(func_param_text_names[i]+r"=$"+r",~".join(fit_text[i])+r"$", size=(font_size-2))
+			else:
+				axs[i, i].set_title(func_param_text_names[i]+r"=$"+r",~".join(fit_text[i])+r"\times10^{%i}$"%order_of[i], size=(font_size-2))
+		
+	## Adjusting axes for scientific notation
+	for i in range(func_param_len):
+		if axis_maxs[i] < 0.2:		###Have to do this AFTER the plot is generated in order to grab the scientific notation text
+			plt.subplots_adjust(wspace=space, hspace=space)	###General default is 0.2, so increasing slightly to prevent any sci notation overlap
+			axs[i, 0].ticklabel_format(style="sci", scilimits=(0, 0))
+			axs[-1, i].ticklabel_format(style="sci", scilimits=(0, 0))
+			axs[i, 0].figure.canvas.draw()
+			axs[i, 0].yaxis.get_offset_text().set_visible(False)
+			axs[-1, i].xaxis.get_offset_text().set_visible(False)
+			axs[i, 0].set_ylabel(func_param_text_names[i] + "  [" + axs[i, 0].get_yaxis().get_offset_text().get_text() + "]", size=font_size)
+			axs[-1, i].set_xlabel(func_param_text_names[i] + "  [" + axs[-1, i].get_xaxis().get_offset_text().get_text() + "]", size=font_size)
+		elif axis_maxs[i] > 1000:
+			plt.subplots_adjust(wspace=space, hspace=space)	###General default is 0.2, so increasing slightly to prevent any sci notation overlap
+			axs[i, 0].ticklabel_format(style="sci", scilimits=(0, 0))
+			axs[-1, i].ticklabel_format(style="sci", scilimits=(0, 0))
+			axs[i, 0].figure.canvas.draw()
+			axs[i, 0].yaxis.get_offset_text().set_visible(False)
+			axs[-1, i].xaxis.get_offset_text().set_visible(False)
+			axs[i, 0].set_ylabel(func_param_text_names[i] + "  [" + axs[i,0].get_yaxis().get_offset_text().get_text() + "]", size=font_size)
+			axs[-1, i].set_xlabel(func_param_text_names[i] + "  [" + axs[-1,i].get_xaxis().get_offset_text().get_text() + "]", size=font_size)
+		else:
+			axs[i, 0].set_ylabel(func_param_text_names[i], size=font_size)
+			axs[-1, i].set_xlabel(func_param_text_names[i], size=font_size)
+		axs[-1, i].set_xlim(axis_mins[i], axis_maxs[i])
+	###Setting upper left corner
+	axs[0, 0].set_ylabel(func_param_text_names[0], size=font_size, labelpad=16)
+	###now ensuring left subplots have same y-axes as bottom subplot's x-axes...
+	for i in range(1, func_param_len):
+		axs[i, 0].set_yticks(axs[-1, i].get_xticks())
+		axs[i, 0].set_ylim(axs[-1, i].get_xlim())	###I guess the order matters here?? lim needed after ticks or else ticks will overwrite???? Cool.
+	
+	###placing the legend above center... or attempting to....
+	if legend_names:
+		proxy = [plt.Rectangle((0, 0), 1, 1, fc=cmaps[i](1.0), alpha=alpha) for i in range(len(legend_names))]
+		fig.legend(proxy, legend_names, loc="center", bbox_to_anchor=axs[0, 1].get_position(), fontsize=font_size)
+
+	if save_name:
+		plt.savefig(save_name, dpi=400, bbox_inches="tight")
+	else:
+		plt.tight_layout()
+		plt.show()
+	plt.cla()
+	plt.clf()
+	plt.close("all")	###To save memory
+	return None
 
 
-def cont_bnds_func_fitted(func_fitted: Callable, x_cont_vals: list or np.ndarray, fit_param_combos: dict, linear_paramNames: list or np.ndarray = [],
+def cont_bnds_func_fitted(func_fitted: Callable, x_cont_vals: list or np.ndarray, fit_param_combos: dict, linear_param_names: list or np.ndarray = [], verbose=False,
 	**func_fitted_kwargs):
+	"""Determines min and max values along all x_cont_vals for given func_fitted function and parameter combinations fit_param_combos.
+	Most likely to be used with outputs produced (as fit_param_combos) by within_n_dim_bnds option of func_fit()...
+
+	Parameters
+	----------
+	func_fitted: Callable
+		function to get min and max outputs. (Often will be same function as used to fit via func_fit())
+	x_cont_vals: list or np.ndarray
+		set of x values to pass through func_fitted at all fit_param_combos
+	fit_param_combos: dict
+		dict containing keys for all variable parameters in func_fitted and 
+		values being a np.ndarray of equal length corresponding to parameter combos to consider
+	linear_param_names: list, optional
+		list of parameter names that are linear.  Used to speed up computation.
+	verbose: bool, optional
+		Option to view printed checkpoints, info, etc within function. Default == False
+	**func_fitted_kwargs: 
+		Any additional kwargs needed passed through func_fitted.
+
+	Returns
+	-------
+	np.ndarray, np.ndarray
+	arrays of mins and maxes
+
+	"""
 	###Check if any parameters need scaling
-	if linear_paramNames:	###This does not actually make it faster right now... need to figure out a way to...
-		linears = np.asarray([fit_param_combos[l] for l in linear_paramNames])
-		print(linears.shape)
+	if linear_param_names:	###This does not actually make it faster right now... need to figure out a way to...
+		linears = np.asarray([fit_param_combos[l] for l in linear_param_names])
+		if verbose:
+			print("linear shape: ", linears.shape)
 		nonlin_kys = list(fit_param_combos.keys())
-		# print(nonlin_kys)
-		for l in linear_paramNames:
+		for l in linear_param_names:
 			nonlin_kys.remove(l)
-		print("nonlinear keys: ",nonlin_kys)
+		if verbose:
+			print("nonlinear keys: ",nonlin_kys)
 		nonlinears = np.asarray([fit_param_combos[nl] for nl in nonlin_kys])
 		nonlinears_unique, nonlinears_unique_inverse = np.unique(nonlinears, axis=-1, return_inverse=True)
-		print("-----------------")
-		if nonlinears.size == 0 or (len(linear_paramNames)+1)*nonlinears_unique.shape[-1] < nonlinears.shape[-1]:			###i.e. number of combos to pass through are worth it (time-wise...)
-			print("linear method employed")
+		if verbose:
+			print("-----------------")
+		if nonlinears.size == 0 or (len(linear_param_names)+1)*nonlinears_unique.shape[-1] < nonlinears.shape[-1]:			###i.e. number of combos to pass through are worth it (time-wise...)
+			if verbose:
+				print("linear method employed")
 			nonlinears_unique = dict([[nonlin_kys[nl],nonlinears_unique[nl]] for nl in range(len(nonlin_kys))])
 			###Constant term when linears==0
-			constant = func_fitted(x_cont_vals[...,None],**nonlinears_unique,**dict([[l,0] for l in linear_paramNames]),**func_fitted_kwargs)
+			constant = func_fitted(x_cont_vals[...,None],**nonlinears_unique,**dict([[l,0] for l in linear_param_names]),**func_fitted_kwargs)
 			###Now each linear term (when all other linears are still 0), subtracting constant term
-			linear_terms = [(func_fitted(x_cont_vals[...,None],**nonlinears_unique,**dict([[l,0] for l in linear_paramNames if l!=i]),**dict([[i,1]]),**func_fitted_kwargs)-constant) for i in linear_paramNames]
+			linear_terms = [(func_fitted(x_cont_vals[...,None],**nonlinears_unique,**dict([[l,0] for l in linear_param_names if l!=i]),**dict([[i,1]]),**func_fitted_kwargs)-constant) for i in linear_param_names]
 			
 			###Now add them together to get result for each combo
 			if len(nonlin_kys) == 0:	###I.e. only 1 combo was passed through each linear term calculation and constant
 				result = constant
-				for l in range(len(linear_paramNames)):
+				for l in range(len(linear_param_names)):
 					result = result + linear_terms[l]*linears[l]
 			else:
 				constant = constant[...,nonlinears_unique_inverse]
 				result = constant
-				for l in range(len(linear_paramNames)):
+				for l in range(len(linear_param_names)):
 					result = result + linear_terms[l][...,nonlinears_unique_inverse]*linears[l]
 		else:
 			result = func_fitted(x_cont_vals[...,None], **fit_param_combos, **func_fitted_kwargs)
 	else:
 		result = func_fitted(x_cont_vals[...,None], **fit_param_combos, **func_fitted_kwargs)
-	# print(result.shape)
+	if verbose:
+		print("result shape: ", result.shape)
 	mins = result.min(axis=1)
 	maxes = result.max(axis=1)
 	return mins, maxes

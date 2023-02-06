@@ -92,7 +92,7 @@ def y_to_mJy(freq, y, arcmin=True):	###Converts y back into T_CMB, then to inten
 	else:
 		return y * T_CMB * (x_freq*(np.exp(x_freq)+1)/(np.exp(x_freq)-1)-4) * cmb_temp_to_intensity(freq) * 1e3
 
-def dust_intensity_to_mJy(freq, dust_intensity, T_dust, beta_dust, z, v_0=353, arcmin=True):
+def dust_intensity_to_mJy(freq, dust_intensity, t_dust, beta_dust, z, v_0=353, arcmin=True):
 	"""Dust intensity integrated over solid angle [W / Hz / m^2] in REFERENCE FRAME to milli-Janskies [mJy] in OBSERVED FRAME
 	Note: reference to observed includes an additional (1+z) / (1+z)**2 term
 	arcmin=True for when measurement is over an arcmin^2 solid angle
@@ -103,7 +103,7 @@ def dust_intensity_to_mJy(freq, dust_intensity, T_dust, beta_dust, z, v_0=353, a
 		Frequency in [GHz]
 	dust_intensity: float
 		Integrated dust intensity amplitude [W / Hz / m^2] to scale by
-	T_dust: float
+	t_dust: float
 		Dust temperature
 	beta_dust: float
 		Dust emissivity index
@@ -120,9 +120,40 @@ def dust_intensity_to_mJy(freq, dust_intensity, T_dust, beta_dust, z, v_0=353, a
 	"""
 	if arcmin:
 		arcmin_to_radian = np.pi / 180 / 60		#[rad/arcmin]
-		return dust_intensity / (1+z) * bb_spectrum(freq, T_dust, z=z, modified=True, beta=beta_dust, v_0=v_0) / bb_spectrum(v_0, T_dust, z=0, modified=True, beta=beta_dust, v_0=v_0) * 1e29 * arcmin_to_radian**2
+		return dust_intensity / (1+z) * bb_spectrum(freq, t_dust, z=z, modified=True, beta=beta_dust, v_0=v_0) / bb_spectrum(v_0, t_dust, z=0, modified=True, beta=beta_dust, v_0=v_0) * 1e29 * arcmin_to_radian**2
 	else:
-		return dust_intensity / (1+z) * bb_spectrum(freq, T_dust, z=z, modified=True, beta=beta_dust, v_0=v_0) / bb_spectrum(v_0, T_dust, z=0, modified=True, beta=beta_dust, v_0=v_0) * 1e29
+		return dust_intensity / (1+z) * bb_spectrum(freq, t_dust, z=z, modified=True, beta=beta_dust, v_0=v_0) / bb_spectrum(v_0, t_dust, z=0, modified=True, beta=beta_dust, v_0=v_0) * 1e29
+
+def y_and_dust_to_mJy(freq, y, dust_intensity, t_dust, beta_dust, z, v_0=353, arcmin=True):
+	"""Dust intensity integrated over solid angle [W / Hz / m^2] in REFERENCE FRAME to milli-Janskies [mJy] in OBSERVED FRAME
+	Note: reference to observed includes an additional (1+z) / (1+z)**2 term
+	arcmin=True for when measurement is over an arcmin^2 solid angle
+	
+	Parameters
+	----------
+	freq: float
+		Frequency in [GHz]
+	y: float
+		Integrated Compton-y amplitude [sr or arcmin^2] to scale by
+	dust_intensity: float
+		Integrated dust intensity amplitude [W / Hz / m^2] to scale by
+	t_dust: float
+		Dust temperature
+	beta_dust: float
+		Dust emissivity index
+	z: float
+		Redshift
+	v_0: float, optional
+		Reference frequency [GHz]
+	arcmin: bool, optional
+		If integrated solid angle is arcmin^2 instead of steradian (rad^2)
+	
+	Returns
+	-------
+	float
+	"""
+	return y_to_mJy(freq, y, arcmin=arcmin) + dust_intensity_to_mJy(freq, dust_intensity, t_dust, beta_dust, z, v_0=v_0, arcmin=arcmin)
+
 
 def uK_to_mJy(freq, uK, arcmin=True):
 	"""convert micro Kelvin measurement (uK) to milli-Janskies (mJy) at the given frequency [GHz]
@@ -135,7 +166,7 @@ def uK_to_mJy(freq, uK, arcmin=True):
 	else:
 		return uK * cmb_temp_to_intensity(freq) * 1e-3
 
-def tsz_dust_single_freq(freq, z, beta_dust, t_dust, a_y, a_dust, dust_v_0=353, T_CMB=2.725):
+def tsz_dust_single_freq(freq, z, beta_dust, t_dust, y, dust_intensity, dust_v_0=353, T_CMB=2.725):
 	"""Where freq == 2 rows: frequency band [row 0] and weights [row 1].  dust_v_0 is dust reference/rest frequency in GHz to scale to.
 	
 	Parameters
@@ -183,9 +214,9 @@ def tsz_dust_single_freq(freq, z, beta_dust, t_dust, a_y, a_dust, dust_v_0=353, 
 	# y_int=1	###When testing
 	d_int = dust_func(freq * (1+z)) / dBdT_func(x_freq) / (1+z) / dust_func(dust_v_0)			####Now factor of (1+z)/(1+z)^2
 	# Dx_int=1	###When testing
-	return a_y*y_int + a_dust*d_int
+	return y*y_int + dust_intensity*d_int
 
-def tsz_dust_over_band(freq, z, beta_dust, t_dust, a_y, a_dust, dust_v_0=353, T_CMB=2.725):
+def tsz_dust_over_band(freq, z, beta_dust, t_dust, y, dust_intensity, dust_v_0=353, T_CMB=2.725):
 	"""Where freq == 2 rows: frequency band [row 0] and weights [row 1].  dust_v_0 is dust reference/rest frequency in GHz to scale to.
 	
 	Parameters
@@ -237,7 +268,7 @@ def tsz_dust_over_band(freq, z, beta_dust, t_dust, a_y, a_dust, dust_v_0=353, T_
 	# y_int=1	###When testing
 	d_int = spint.simps(band * dust_func(freq[0] * (1+z)) / dBdT_func(x_freq), x=freq[0], axis=0) / (1+z) / band_sum / dust_func(dust_v_0)			####Now factor of (1+z)/(1+z)^2
 	# Dx_int=1	###When testing
-	return a_y*y_int + a_dust*d_int
+	return y*y_int + dust_intensity*d_int
 
 
 ###Radial profile stuff
