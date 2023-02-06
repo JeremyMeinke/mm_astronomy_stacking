@@ -5,4 +5,4 @@ Relevant code and examples used in analysis and stacking of mm astronomical maps
 Notes: 
 - requirements.txt lists required Python modules to run all relevant files.  
 - **Healpy** is currently only available on Linux/macOS systems (*not Windows*)
-
+- Python >= 3.7 recommended, some functions may not work as predicted on depreciated versions.
