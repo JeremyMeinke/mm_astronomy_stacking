@@ -8,6 +8,9 @@ data/alm_combined_data_95GHz_ptsrcmasked_50mJy.fits
 data/alm_combined_data_150GHz_ptsrcmasked_50mJy.fits
 data/alm_combined_data_220GHz_ptsrcmasked_50mJy.fits
 
+###SPT Mask Distance Map (Combining .npy data files into a map)
+data/spt_mask_distances_chown2018.fits
+
 ###Example Catalog
 data/2500d_cluster_sample_Bocquet19.fits
 
