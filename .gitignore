@@ -8,8 +8,9 @@ data/alm_combined_data_95GHz_ptsrcmasked_50mJy.fits
 data/alm_combined_data_150GHz_ptsrcmasked_50mJy.fits
 data/alm_combined_data_220GHz_ptsrcmasked_50mJy.fits
 
-###SPT Mask Distance Map (Combining .npy data files into a map)
-data/spt_mask_distances_chown2018.fits
+###SPT Masks
+data/mask_nside8192_bdry.fits
+data/mask_nside8192_ptsrc_50mJy.fits
 
 ###Example Catalog
 data/2500d_cluster_sample_Bocquet19.fits
@@ -22,6 +23,9 @@ data/act_planck_dr5.01_s08s18_AA_f220_daynight_fullivar.fits
 data/act_planck_dr5.01_s08s18_AA_f090_daynight_map_srcfree.fits
 data/act_planck_dr5.01_s08s18_AA_f150_daynight_map_srcfree.fits
 data/act_planck_dr5.01_s08s18_AA_f220_daynight_map_srcfree.fits
+
+###Planck CMB Map(s)
+data/COM_CMB_IQU-smica-nosz_2048_R3.00_full.fits
 
 ###pycaches just to be safe
 ./__pycache__/
