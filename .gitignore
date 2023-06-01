@@ -15,6 +15,10 @@ data/mask_nside8192_ptsrc_50mJy.fits
 ###Example Catalog
 data/2500d_cluster_sample_Bocquet19.fits
 
+###Healpy pixel weights
+data/healpix_full_weights_nside_2048.fits
+data/healpix_full_weights_nside_8192.fits
+
 ###ACT products
 data/act_dr5.01_auxilliary/
 data/act_planck_dr5.01_s08s18_AA_f090_daynight_fullivar.fits

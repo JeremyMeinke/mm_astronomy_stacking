@@ -53,10 +53,11 @@ def gnomonic(center_dec, center_ra, pix_res, side_size=60):		###[Deg,Deg,Arcmin,
 	return t_set, p_set
 
 def map_data_healpix_fits(
-		file_name, hdu=1, nside=8192, healpix_alm=False, input_nest=False, 
+		file_name, hdu=1, field=0, nside=8192, healpix_alm=False, return_alm=False, 
 		rotation=False, rot_coord=["G", "C"], rot_lmax=None, unreadable_header=False):
 	"""Load map_data from healpix-formatted fits file into a ring healpix map format (standard healpy format).
-		***Careful with Planck maps, they can be in nested and galactic formats (though not always...)***
+		***Careful with Planck maps, they can be in galactic formats (though not always...) and  
+		nested healpy format (adjust for nest/ring separately afterwards)***
 		
 	Parameters
 	----------
@@ -64,13 +65,15 @@ def map_data_healpix_fits(
 	file_name: str
 		file name to load
 	hdu: int, optional
-		(Default == 1) If file contains multiple maps (such as T, Q, U), specify which hdu to open. Data normally starts at 1, not 0 due to first being the fits PrimaryHDU
+		(Default == 1)  Specify which header to get.  Data normally starts at 1, not 0 due to first being the fits PrimaryHDU.
+	field: int, optional
+		(Default == 0) If file contains multiple maps on same header (such as T, Q, U), specify which field/column to select.
 	nside: int, optional
 		healpix nside resolution of map.  Default == 8192 (resolution of SPT maps)
 	healpix_alm: bool, optional
 		For when provided file is a healpix alm (spherical harmonic coeffs). Default == False
-	input_nest: bool, optional
-		For when provided file is healpix nested format (instead of default ring). Doesn't apply to alms.  Default == False
+	return_alm: bool, optional
+		If seeking to return just the alm and not the map version of the data. Default == True
 	rotation: bool, optional
 		Whether the input map is wanted to be rotated.  Default == False
 	rot_coord: list, optional 
@@ -86,24 +89,24 @@ def map_data_healpix_fits(
 		Corresponding to healpy map formatting
 	"""
 	if healpix_alm:
-		alm = hp.read_alm(file_name)
+		alm = hp.read_alm(file_name, hdu=1)
 		if rotation:
 			rot = hp.rotator.Rotator(coord=rot_coord)
 			alm = rot.rotate_alm(alm, rot_lmax)
-		map_data = hp.alm2map(alm, nside)
-		alm = None; del alm			###attempted memory cleaning
+		if return_alm:
+			gc.collect()
+			return alm
+		else:
+			map_data = hp.alm2map(alm, nside)
+			alm = None; del alm			###attempted memory cleaning
 	else:
 		if unreadable_header:
-			m = fits.open(file_name)
-			map_data = np.asarray(np.ndarray.tolist(m[hdu].data))
+			m = fits.open(file_name, memmap=True)
+			map_data = np.asarray(np.ndarray.tolist(m[hdu].data.field(field)))
 			map_data = map_data.reshape(np.prod(map_data.shape),)	###As some in IDL format with two-dimensional even tho healpy does better with one dim.
 			m = None; del m			###same attempt at memory cleaning
 		else:
-			map_data = hp.read_map(file_name, field=hdu - 1,  dtype=np.float64, nest=input_nest, memmap=True)
-		###Now correcting for nest to rings
-		if input_nest:
-			hp.reorder(map_data, n2r=True)
-	
+			map_data = hp.read_map(file_name, field=field,  dtype=np.float64, memmap=True)
 		###Now applying rotation to map
 		if rotation:
 			rot = hp.rotator.Rotator(coord=rot_coord)
