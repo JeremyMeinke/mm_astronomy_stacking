@@ -31,6 +31,13 @@ data/act_planck_dr5.01_s08s18_AA_f220_daynight_map_srcfree.fits
 ###Planck CMB Map(s)
 data/COM_CMB_IQU-smica-nosz_2048_R3.00_full.fits
 
+###Generated data from map_processing.ipynb
+data/SMICAnoSZ_alm.fits
+data/spt_95GHz_minus_SMICAnoSZ_2.10fwhm_alm.fits
+data/spt_150GHz_minus_SMICAnoSZ_2.10fwhm_alm.fits
+data/spt_220GHz_minus_SMICAnoSZ_2.10fwhm_alm.fits
+
+
 ###pycaches just to be safe
 ./__pycache__/
 /.ipynb_checkpoints/

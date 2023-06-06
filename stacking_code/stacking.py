@@ -57,11 +57,13 @@ def map_data_healpix_fits(
 		rotation=False, rot_coord=["G", "C"], rot_lmax=None, unreadable_header=False):
 	"""Load map_data from healpix-formatted fits file into a ring healpix map format (standard healpy format).
 		***Careful with Planck maps, they can be in galactic formats (though not always...) and  
-		nested healpy format (adjust for nest/ring separately afterwards)***
+		nested healpy format (adjust for nest/ring separately afterwards). 
+		Rotations with healpy here only work on ring maps, so rotation=True should only be used if 
+		unreadable_header=False or you know the input file is in ring format...***
 		
 	Parameters
 	----------
-
+	
 	file_name: str
 		file name to load
 	hdu: int, optional
@@ -73,7 +75,7 @@ def map_data_healpix_fits(
 	healpix_alm: bool, optional
 		For when provided file is a healpix alm (spherical harmonic coeffs). Default == False
 	return_alm: bool, optional
-		If seeking to return just the alm and not the map version of the data. Default == True
+		(When healpix_alm=True) If seeking to return just the alm and not the map version of the data. Default == False
 	rotation: bool, optional
 		Whether the input map is wanted to be rotated.  Default == False
 	rot_coord: list, optional 
@@ -102,11 +104,12 @@ def map_data_healpix_fits(
 	else:
 		if unreadable_header:
 			m = fits.open(file_name, memmap=True)
-			map_data = np.asarray(np.ndarray.tolist(m[hdu].data.field(field)))
-			map_data = map_data.reshape(np.prod(map_data.shape),)	###As some in IDL format with two-dimensional even tho healpy does better with one dim.
+			map_data = np.asarray(m[hdu].data.field(field))
+			if len(map_data.shape) > 1: ###As some in IDL format with two-dimensional even tho healpy does better with one dim.
+				map_data = map_data.reshape(np.prod(map_data.shape),)
 			m = None; del m			###same attempt at memory cleaning
 		else:
-			map_data = hp.read_map(file_name, field=field,  dtype=np.float64, memmap=True)
+			map_data = hp.read_map(file_name, field=field, hdu=hdu, memmap=True)
 		###Now applying rotation to map
 		if rotation:
 			rot = hp.rotator.Rotator(coord=rot_coord)
