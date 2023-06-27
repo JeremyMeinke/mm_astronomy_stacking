@@ -36,7 +36,9 @@ data/SMICAnoSZ_alm.fits
 data/spt_95GHz_minus_SMICAnoSZ_2.10fwhm_alm.fits
 data/spt_150GHz_minus_SMICAnoSZ_2.10fwhm_alm.fits
 data/spt_220GHz_minus_SMICAnoSZ_2.10fwhm_alm.fits
-
+data/act_planck_daynight_srcfree_90GHz_minus_SMICAnoSZ_2.10fwhm_alm_example_REMOVE_ACT_PIXEL_WINDOW.fits
+data/act_planck_daynight_srcfree_150GHz_minus_SMICAnoSZ_2.10fwhm_alm_example_REMOVE_ACT_PIXEL_WINDOW.fits
+data/act_planck_daynight_srcfree_220GHz_minus_SMICAnoSZ_2.10fwhm_alm_example_REMOVE_ACT_PIXEL_WINDOW.fits
 
 ###pycaches just to be safe
 ./__pycache__/
